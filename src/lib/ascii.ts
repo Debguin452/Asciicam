@@ -14,6 +14,7 @@ export interface AsciiOptions {
 
 export interface AsciiCell {
   char: string;
+  charIdx: number;
   r: number;
   g: number;
   b: number;
@@ -124,6 +125,7 @@ export function processFrame(
       const charIdx = clamp(idx, 0, nchars - 1);
       row.push({
         char: chars[charIdx],
+        charIdx,
         r: color ? rArr[i] : 0,
         g: color ? gArr[i] : 0,
         b: color ? bArr[i] : 0,
