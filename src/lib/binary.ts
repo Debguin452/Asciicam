@@ -1,6 +1,7 @@
 import type { AsciiFrame } from "./ascii";
 
 const MAGIC = "ACB1";
+const MAGIC2 = "ACB2";
 
 export function bitsNeeded(n: number): number {
   if (n <= 1) return 1;
@@ -11,18 +12,22 @@ export function encodeFramesToBinary(
   frames: AsciiFrame[],
   charset: string,
   asciiW: number,
-  asciiH: number
+  asciiH: number,
+  includeColor = false
 ): Uint8Array {
   const charsetBytes = new TextEncoder().encode(charset);
   const bitsPerChar = bitsNeeded(charset.length);
-  const bytesPerFrame = Math.ceil((asciiW * asciiH * bitsPerChar) / 8);
+  const bytesPerIndexFrame = Math.ceil((asciiW * asciiH * bitsPerChar) / 8);
+  const bytesPerColorFrame = includeColor ? asciiW * asciiH * 3 : 0;
+  const bytesPerFrame = bytesPerIndexFrame + bytesPerColorFrame;
 
-  const headerLen = 4 + 1 + charsetBytes.length + 2 + 2 + 4 + 1;
+  const headerLen = 4 + 1 + charsetBytes.length + 2 + 2 + 4 + 1 + 1;
   const total = headerLen + bytesPerFrame * frames.length;
   const out = new Uint8Array(total);
   let p = 0;
 
-  for (let i = 0; i < 4; i++) out[p++] = MAGIC.charCodeAt(i);
+  const magic = includeColor ? MAGIC2 : MAGIC;
+  for (let i = 0; i < 4; i++) out[p++] = magic.charCodeAt(i);
   out[p++] = charsetBytes.length;
   out.set(charsetBytes, p);
   p += charsetBytes.length;
@@ -35,6 +40,7 @@ export function encodeFramesToBinary(
   out[p++] = (frames.length >>> 8) & 0xff;
   out[p++] = frames.length & 0xff;
   out[p++] = bitsPerChar;
+  out[p++] = includeColor ? 1 : 0;
 
   for (const frame of frames) {
     let bitBuf = 0;
@@ -53,6 +59,17 @@ export function encodeFramesToBinary(
     if (bitCount > 0) {
       out[p++] = (bitBuf << (8 - bitCount)) & 0xff;
     }
+
+    if (includeColor) {
+      for (let y = 0; y < asciiH; y++) {
+        for (let x = 0; x < asciiW; x++) {
+          const cell = frame[y][x];
+          out[p++] = cell.r;
+          out[p++] = cell.g;
+          out[p++] = cell.b;
+        }
+      }
+    }
   }
 
   return out;
@@ -64,13 +81,16 @@ export interface DecodedBinary {
   asciiH: number;
   frameCount: number;
   bitsPerChar: number;
+  hasColor: boolean;
   frames: number[][][];
+  colorFrames?: Uint8Array[];
 }
 
 export function decodeBinaryFrames(data: Uint8Array): DecodedBinary {
   let p = 0;
   const magic = String.fromCharCode(data[0], data[1], data[2], data[3]);
-  if (magic !== MAGIC) throw new Error("Invalid file: bad magic header");
+  if (magic !== MAGIC && magic !== MAGIC2) throw new Error("Invalid file: bad magic header");
+  const hasColor = magic === MAGIC2;
   p += 4;
 
   const charsetLen = data[p++];
@@ -82,11 +102,16 @@ export function decodeBinaryFrames(data: Uint8Array): DecodedBinary {
   const frameCount =
     (data[p++] << 24) | (data[p++] << 16) | (data[p++] << 8) | data[p++];
   const bitsPerChar = data[p++];
+  const colorFlag = data[p++];
+  const fileHasColor = hasColor && colorFlag === 1;
 
-  const bytesPerFrame = Math.ceil((asciiW * asciiH * bitsPerChar) / 8);
+  const bytesPerIndexFrame = Math.ceil((asciiW * asciiH * bitsPerChar) / 8);
+  const bytesPerColorFrame = fileHasColor ? asciiW * asciiH * 3 : 0;
   const mask = (1 << bitsPerChar) - 1;
 
   const frames: number[][][] = [];
+  const colorFrames: Uint8Array[] = [];
+
   for (let f = 0; f < frameCount; f++) {
     const frame: number[][] = [];
     let bitBuf = 0;
@@ -106,10 +131,20 @@ export function decodeBinaryFrames(data: Uint8Array): DecodedBinary {
       frame.push(row);
     }
     frames.push(frame);
-    p += bytesPerFrame;
+    p += bytesPerIndexFrame;
+
+    if (fileHasColor) {
+      colorFrames.push(data.slice(p, p + bytesPerColorFrame));
+      p += bytesPerColorFrame;
+    }
   }
 
-  return { charset, asciiW, asciiH, frameCount, bitsPerChar, frames };
+  return {
+    charset, asciiW, asciiH, frameCount, bitsPerChar,
+    hasColor: fileHasColor,
+    frames,
+    colorFrames: fileHasColor ? colorFrames : undefined,
+  };
 }
 
 export async function gzipCompress(data: Uint8Array): Promise<Uint8Array> {

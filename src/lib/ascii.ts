@@ -137,14 +137,21 @@ export function processFrame(
       const i = y * asciiW + x;
       let lum = clamp(finalGray[i]);
 
+      let charIdx: number;
       if (threshold > 0) {
-        lum = lum < threshold ? 0 : 255;
+        const isLight = lum >= threshold;
+        const lightIdx = nchars - 1;
+        const darkIdx = 0;
+        charIdx = invert
+          ? (isLight ? darkIdx : lightIdx)
+          : (isLight ? lightIdx : darkIdx);
+      } else {
+        const idx = invert
+          ? Math.floor((1 - lum / 255) * (nchars - 1))
+          : Math.floor((lum / 255) * (nchars - 1));
+        charIdx = clamp(idx, 0, nchars - 1);
       }
 
-      const idx = invert
-        ? Math.floor((1 - lum / 255) * (nchars - 1))
-        : Math.floor((lum / 255) * (nchars - 1));
-      const charIdx = clamp(idx, 0, nchars - 1);
       row.push({
         char: chars[charIdx],
         charIdx,
