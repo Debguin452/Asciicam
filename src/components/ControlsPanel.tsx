@@ -60,7 +60,7 @@ export default function ControlsPanel({ opts, updateOpt, fontSize, setFontSize, 
           onChange={v => updateOpt("brightness", v)} showSign />
         <SliderRow label="Contrast" value={opts.contrast} min={10} max={300} step={5}
           onChange={v => updateOpt("contrast", v)} unit="%" />
-        <SliderRow label="Threshold" value={opts.threshold} min={0} max={255} step={1}
+        <SliderRow label="Threshold (0 = off)" value={opts.threshold} min={0} max={254} step={1}
           onChange={v => updateOpt("threshold", v)} />
       </div>
 
