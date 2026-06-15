@@ -33,22 +33,6 @@ npm run build
 
 Output goes to `dist/`.
 
-## Deploy to Cloudflare Pages (via GitHub)
-
-1. Push this repo to GitHub (push the contents of this folder, including `wrangler.toml`, `package.json`, `index.html`, `src/`).
-2. In the Cloudflare dashboard: **Workers & Pages → Create → Pages → Connect to Git**, select this repo.
-3. Framework preset: **None / Vite**
-4. Build settings (these matter — a blank page usually means one of these is wrong):
-   - **Build command:** `npm run build`
-   - **Build output directory:** `dist`
-   - **Root directory:** `/` (leave default, unless your repo nests this folder)
-5. Deploy. No environment variables required.
-
-### Blank white page checklist
-- Output directory must be `dist`, not `/` or `build`. If Cloudflare serves the *source* `index.html` (the one with `/src/main.tsx`), you'll get a blank page because that file only exists in dev.
-- Make sure `package.json`, `vite.config.ts`, `tsconfig.json`, and `src/` are all at the repo root (or set "Root directory" to wherever they are).
-- Open the deployed site's browser console — a 404 on `/assets/*.js` confirms the output-directory mismatch above.
-
 ## Credits & License
 
 This project is by **Deb Guin** ([github.com/Debguin452/Asciicam](https://github.com/Debguin452/Asciicam)).
