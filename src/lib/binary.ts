@@ -1,19 +1,5 @@
 import type { AsciiFrame } from "./ascii";
 
-// ─────────────────────────────────────────────────────────
-// Binary frame format ("ACB1")
-//
-// [4]  magic = "ACB1"
-// [1]  charsetLen (N)
-// [N]  charset bytes (UTF-8, index i in charset == binary value i)
-// [2]  asciiW (big-endian uint16)
-// [2]  asciiH (big-endian uint16)
-// [4]  frameCount (big-endian uint32)
-// [1]  bitsPerChar (ceil(log2(charsetLen)), min 1)
-// then for each frame: ceil(asciiW*asciiH*bitsPerChar / 8) bytes,
-// each cell's character index packed MSB-first, frame byte-aligned.
-// ─────────────────────────────────────────────────────────
-
 const MAGIC = "ACB1";
 
 export function bitsNeeded(n: number): number {
@@ -78,8 +64,7 @@ export interface DecodedBinary {
   asciiH: number;
   frameCount: number;
   bitsPerChar: number;
-  /** Per-frame grid of character-index values (0..charset.length-1) */
-  frames: number[][][]; // [frame][row][col]
+  frames: number[][][];
 }
 
 export function decodeBinaryFrames(data: Uint8Array): DecodedBinary {
@@ -127,10 +112,6 @@ export function decodeBinaryFrames(data: Uint8Array): DecodedBinary {
   return { charset, asciiW, asciiH, frameCount, bitsPerChar, frames };
 }
 
-// ─────────────────────────────────────────────────────────
-// Gzip compression via the browser's built-in CompressionStream
-// ─────────────────────────────────────────────────────────
-
 export async function gzipCompress(data: Uint8Array): Promise<Uint8Array> {
   const cs = new CompressionStream("gzip");
   const stream = new Blob([data as BlobPart]).stream().pipeThrough(cs);
@@ -144,14 +125,6 @@ export async function gzipDecompress(data: Uint8Array): Promise<Uint8Array> {
   const buf = await new Response(stream).arrayBuffer();
   return new Uint8Array(buf);
 }
-
-// ─────────────────────────────────────────────────────────
-// Text format: multi-frame ASCII video as plain text
-//
-// Header line: "ACASCII1 <asciiW> <asciiH> <charset>"
-// Then each frame is asciiH lines of asciiW chars, frames
-// separated by a line containing only "---FRAME---"
-// ─────────────────────────────────────────────────────────
 
 export function encodeFramesToText(
   frames: AsciiFrame[],
@@ -173,7 +146,7 @@ export interface DecodedText {
   charset: string;
   asciiW: number;
   asciiH: number;
-  frames: string[][]; // [frame][row] of strings (chars)
+  frames: string[][];
 }
 
 export function decodeTextFrames(text: string): DecodedText {
@@ -198,4 +171,15 @@ export function decodeTextFrames(text: string): DecodedText {
   if (current.length > 0) frames.push(current);
 
   return { charset, asciiW, asciiH, frames };
+}
+
+export function textFramesToIndices(decoded: DecodedText): number[][][] {
+  const charIdx = (ch: string) => {
+    const idx = decoded.charset.indexOf(ch);
+    return idx >= 0 ? idx : 0;
+  };
+  const pad = decoded.charset[0] ?? " ";
+  return decoded.frames.map(grid =>
+    grid.map(row => Array.from(row.padEnd(decoded.asciiW, pad)).map(charIdx))
+  );
 }

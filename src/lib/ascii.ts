@@ -5,6 +5,7 @@ export interface AsciiOptions {
   asciiH: number;
   brightness: number;
   contrast: number;
+  threshold: number;
   invert: boolean;
   color: boolean;
   edges: boolean;
@@ -21,6 +22,8 @@ export interface AsciiCell {
 }
 
 export type AsciiFrame = AsciiCell[][];
+
+export type AsciiSource = HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
 
 function clamp(v: number, lo = 0, hi = 255): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -67,16 +70,26 @@ function floydSteinberg(gray: Float32Array, w: number, h: number, nchars: number
   return buf;
 }
 
-export function processFrame(
-  video: HTMLVideoElement,
-  offscreen: HTMLCanvasElement,
-  opts: AsciiOptions
-): AsciiFrame | null {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (!vw || !vh) return null;
+function getSourceDimensions(source: AsciiSource): { w: number; h: number } {
+  if (source instanceof HTMLVideoElement) {
+    return { w: source.videoWidth, h: source.videoHeight };
+  }
+  if (source instanceof HTMLCanvasElement) {
+    return { w: source.width, h: source.height };
+  }
+  return { w: source.naturalWidth, h: source.naturalHeight };
+}
 
-  const { asciiW, asciiH, brightness, contrast, invert, color, edges, dither, charset } = opts;
+export function processFrame(
+  source: AsciiSource,
+  offscreen: HTMLCanvasElement,
+  opts: AsciiOptions,
+  mirror = true
+): AsciiFrame | null {
+  const { w: sw, h: sh } = getSourceDimensions(source);
+  if (!sw || !sh) return null;
+
+  const { asciiW, asciiH, brightness, contrast, threshold, invert, color, edges, dither, charset } = opts;
   const chars = charset || DEFAULT_CHARSET;
   const nchars = chars.length;
 
@@ -85,8 +98,12 @@ export function processFrame(
   const ctx = offscreen.getContext("2d", { willReadFrequently: true })!;
 
   ctx.save();
-  ctx.scale(-1, 1);
-  ctx.drawImage(video, -asciiW, 0, asciiW, asciiH);
+  if (mirror) {
+    ctx.scale(-1, 1);
+    ctx.drawImage(source, -asciiW, 0, asciiW, asciiH);
+  } else {
+    ctx.drawImage(source, 0, 0, asciiW, asciiH);
+  }
   ctx.restore();
 
   const imgData = ctx.getImageData(0, 0, asciiW, asciiH);
@@ -119,6 +136,11 @@ export function processFrame(
     for (let x = 0; x < asciiW; x++) {
       const i = y * asciiW + x;
       let lum = clamp(finalGray[i]);
+
+      if (threshold > 0) {
+        lum = lum < threshold ? 0 : 255;
+      }
+
       const idx = invert
         ? Math.floor((1 - lum / 255) * (nchars - 1))
         : Math.floor((lum / 255) * (nchars - 1));
@@ -134,4 +156,27 @@ export function processFrame(
     frame.push(row);
   }
   return frame;
+}
+
+export function frameToHtml(frame: AsciiFrame, color: boolean): string {
+  if (!color) {
+    return frame.map(row => row.map(c => c.char === " " ? "\u00a0" : c.char).join("")).join("\n");
+  }
+  const lines: string[] = [];
+  for (const row of frame) {
+    let line = "";
+    for (const cell of row) {
+      if (cell.char === " ") {
+        line += "\u00a0";
+      } else {
+        line += `<span style="color:rgb(${cell.r},${cell.g},${cell.b})">${cell.char}</span>`;
+      }
+    }
+    lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+export function frameToText(frame: AsciiFrame): string {
+  return frame.map(row => row.map(c => c.char).join("")).join("\n");
 }
