@@ -1,0 +1,447 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}
+
+:root {
+  --background: 0 0% 4%;
+  --foreground: 120 100% 50%;
+  --border: 0 0% 13%;
+  --card: 0 0% 7%;
+  --card-foreground: 120 60% 60%;
+  --card-border: 0 0% 13%;
+  --popover: 0 0% 7%;
+  --popover-foreground: 120 60% 60%;
+  --popover-border: 0 0% 13%;
+  --primary: 120 100% 50%;
+  --primary-foreground: 0 0% 0%;
+  --primary-border: hsl(120 100% 40%);
+  --secondary: 0 0% 10%;
+  --secondary-foreground: 120 50% 60%;
+  --secondary-border: hsl(0 0% 13%);
+  --muted: 0 0% 8%;
+  --muted-foreground: 120 30% 35%;
+  --muted-border: hsl(0 0% 13%);
+  --accent: 120 100% 50%;
+  --accent-foreground: 0 0% 0%;
+  --accent-border: hsl(120 100% 40%);
+  --destructive: 0 80% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --destructive-border: hsl(0 80% 45%);
+  --input: 0 0% 15%;
+  --ring: 120 100% 50%;
+  --sidebar: 0 0% 6%;
+  --sidebar-foreground: 120 60% 50%;
+  --sidebar-border: 0 0% 13%;
+  --sidebar-primary: 120 100% 50%;
+  --sidebar-primary-foreground: 0 0% 0%;
+  --sidebar-primary-border: hsl(120 100% 40%);
+  --sidebar-accent: 0 0% 10%;
+  --sidebar-accent-foreground: 120 60% 50%;
+  --sidebar-accent-border: hsl(0 0% 13%);
+  --sidebar-ring: 120 100% 50%;
+  --chart-1: 120 100% 50%;
+  --chart-2: 180 100% 50%;
+  --chart-3: 60 100% 50%;
+  --chart-4: 270 100% 60%;
+  --chart-5: 30 100% 55%;
+  --app-font-sans: 'JetBrains Mono', 'Fira Code', monospace;
+  --app-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --radius: 0.25rem;
+  --button-outline: rgba(0,0,0,0.10);
+  --badge-outline: rgba(0,0,0,0.05);
+  --opaque-button-border-intensity: -8;
+  --elevate-1: rgba(255,255,255,.04);
+  --elevate-2: rgba(255,255,255,.09);
+}
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background: hsl(0 0% 4%);
+  color: hsl(120 100% 50%);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* ─── Layout ──────────────────────────────────────── */
+
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: #0a0a0a;
+  color: #39ff14;
+}
+
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ─── Top bar ─────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #111111;
+  border-bottom: 1px solid #222222;
+  gap: 12px;
+  min-height: 42px;
+  flex-shrink: 0;
+}
+
+.topbar-left, .topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #39ff14;
+  text-shadow: 0 0 8px #39ff14;
+}
+
+.fps-badge {
+  font-size: 11px;
+  color: #4a8a38;
+  background: #0f1f0a;
+  border: 1px solid #2a5a22;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  min-width: 54px;
+  text-align: center;
+}
+
+.error-badge {
+  font-size: 11px;
+  color: #ff3b30;
+  background: #1a0505;
+  border: 1px solid #4a1515;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* ─── Buttons ─────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+}
+
+.btn-primary {
+  background: #39ff14;
+  color: #000;
+  border-color: #39ff14;
+}
+.btn-primary:hover { box-shadow: 0 0 10px #39ff14; }
+
+.btn-danger {
+  background: #ff3b30;
+  color: #fff;
+  border-color: #ff3b30;
+}
+.btn-danger:hover { box-shadow: 0 0 10px #ff3b30; }
+
+.btn-ghost {
+  background: transparent;
+  color: #4a8a38;
+  border-color: #222222;
+}
+.btn-ghost:hover {
+  background: #161616;
+  color: #39ff14;
+  border-color: #333;
+}
+
+.btn-active {
+  background: #39ff14;
+  color: #000;
+  border-color: #39ff14;
+}
+
+.btn-sm { padding: 3px 8px; font-size: 11px; }
+.btn-xs { padding: 2px 6px; font-size: 10px; }
+.btn-lg { padding: 12px 28px; font-size: 14px; font-weight: 700; }
+.btn-full { width: 100%; justify-content: center; }
+
+.btn-preset {
+  background: #161616;
+  color: #4a8a38;
+  border-color: #222222;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.btn-preset:hover { color: #39ff14; border-color: #39ff14; }
+
+.btn-group {
+  display: flex;
+  gap: 2px;
+}
+
+/* ─── ASCII output area ───────────────────────────── */
+
+.ascii-area {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: #0a0a0a;
+  padding: 16px;
+  position: relative;
+}
+
+.ascii-area::-webkit-scrollbar { width: 6px; height: 6px; }
+.ascii-area::-webkit-scrollbar-track { background: transparent; }
+.ascii-area::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+
+.ascii-output {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: #39ff14;
+  background: transparent;
+  white-space: pre;
+  tab-size: 1;
+  line-height: 1.15;
+  flex-shrink: 0;
+}
+
+/* ─── Splash screen ───────────────────────────────── */
+
+.splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  position: absolute;
+  inset: 0;
+}
+
+.splash-art {
+  white-space: pre;
+  font-size: 13px;
+  color: #4a8a38;
+  text-align: center;
+  line-height: 1.4;
+  animation: glow 2s ease-in-out infinite alternate;
+}
+
+@keyframes glow {
+  from { text-shadow: 0 0 6px #39ff14; }
+  to   { text-shadow: 0 0 18px #39ff14, 0 0 30px #2a5a22; }
+}
+
+.splash-hint {
+  font-size: 12px;
+  color: #2a5a22;
+  letter-spacing: 0.06em;
+}
+
+/* ─── Controls panel ──────────────────────────────── */
+
+.controls-panel {
+  width: 240px;
+  flex-shrink: 0;
+  background: #111111;
+  border-left: 1px solid #222222;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #222 transparent;
+}
+
+.controls-panel::-webkit-scrollbar { width: 4px; }
+.controls-panel::-webkit-scrollbar-track { background: transparent; }
+.controls-panel::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+
+.panel-section {
+  padding: 12px;
+  border-bottom: 1px solid #222222;
+}
+
+.section-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #2a5a22;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+/* ─── Preset grid ─────────────────────────────────── */
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+/* ─── Slider rows ─────────────────────────────────── */
+
+.slider-row { margin-bottom: 10px; }
+.slider-row:last-child { margin-bottom: 0; }
+
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 4px;
+  color: #4a8a38;
+}
+
+.slider-value {
+  color: #39ff14;
+  min-width: 36px;
+  text-align: right;
+}
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: #222;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #39ff14;
+  cursor: pointer;
+  box-shadow: 0 0 4px #39ff14;
+}
+
+.slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #39ff14;
+  border: none;
+  cursor: pointer;
+}
+
+/* ─── Toggle buttons ──────────────────────────────── */
+
+.toggle-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  background: #161616;
+  border: 1px solid #222222;
+  border-radius: 4px;
+  color: #2a5a22;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  letter-spacing: 0.03em;
+}
+
+.toggle-btn:hover { color: #4a8a38; border-color: #333; }
+
+.toggle-btn.toggle-on {
+  background: #0f200a;
+  border-color: #39ff14;
+  color: #39ff14;
+}
+
+.toggle-indicator { font-size: 10px; }
+
+/* ─── Control row ─────────────────────────────────── */
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #4a8a38;
+  gap: 8px;
+}
+
+/* ─── Charset input ───────────────────────────────── */
+
+.charset-input {
+  width: 100%;
+  background: #161616;
+  border: 1px solid #222222;
+  border-radius: 4px;
+  color: #39ff14;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 6px 8px;
+  outline: none;
+  margin-bottom: 6px;
+  letter-spacing: 0.04em;
+}
+
+.charset-input:focus { border-color: #39ff14; }
+
+.charset-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.panel-toggle { font-size: 11px; }
