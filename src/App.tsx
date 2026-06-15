@@ -1,5 +1,13 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, type ChangeEvent } from "react";
 import { processFrame, DEFAULT_CHARSET, type AsciiOptions, type AsciiFrame } from "./lib/ascii";
+import {
+  encodeFramesToBinary,
+  decodeBinaryFrames,
+  gzipCompress,
+  gzipDecompress,
+  encodeFramesToText,
+  decodeTextFrames,
+} from "./lib/binary";
 
 const PRESETS = {
   "Classic": { charset: " .:-=+*#%@", color: false, edges: false, dither: false, invert: false },
@@ -26,6 +34,18 @@ export default function App() {
   const [fps, setFps] = useState(0);
   const [panelOpen, setPanelOpen] = useState(true);
   const [fontSize, setFontSize] = useState(10);
+  const [recording, setRecording] = useState(false);
+  const [recordedCount, setRecordedCount] = useState(0);
+  const [playback, setPlayback] = useState<{
+    frames: number[][][];
+    charset: string;
+    asciiW: number;
+    asciiH: number;
+  } | null>(null);
+  const recordedFramesRef = useRef<AsciiFrame[]>([]);
+  const recordDimsRef = useRef<{ w: number; h: number; charset: string } | null>(null);
+  const playbackRafRef = useRef<number>(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [opts, setOpts] = useState<AsciiOptions>({
     asciiW: 120,
     asciiH: 50,
@@ -57,6 +77,11 @@ export default function App() {
     const frame = processFrame(video, offscreenRef.current, opts);
     if (frame) {
       pre.innerHTML = frameToHtml(frame, opts.color);
+      if (recording) {
+        recordedFramesRef.current.push(frame);
+        recordDimsRef.current = { w: opts.asciiW, h: opts.asciiH, charset: opts.charset || DEFAULT_CHARSET };
+        setRecordedCount(recordedFramesRef.current.length);
+      }
     }
 
     const now = performance.now();
@@ -69,17 +94,47 @@ export default function App() {
     }
 
     rafRef.current = requestAnimationFrame(renderFrame);
-  }, [opts]);
+  }, [opts, recording]);
 
   useEffect(() => {
-    if (running) {
+    if (running && !playback) {
       rafRef.current = requestAnimationFrame(renderFrame);
     }
     return () => cancelAnimationFrame(rafRef.current);
-  }, [running, renderFrame]);
+  }, [running, renderFrame, playback]);
+
+  // Playback loop for imported ASCII video
+  useEffect(() => {
+    if (!playback) return;
+    const pre = preRef.current;
+    if (!pre) return;
+
+    const { frames, charset, asciiW, asciiH } = playback;
+    let i = 0;
+
+    const drawFrame = () => {
+      const grid = frames[i];
+      const lines: string[] = [];
+      for (let y = 0; y < asciiH; y++) {
+        let line = "";
+        for (let x = 0; x < asciiW; x++) {
+          const ch = charset[grid[y][x]] ?? " ";
+          line += ch === " " ? "\u00a0" : ch;
+        }
+        lines.push(line);
+      }
+      pre.textContent = lines.join("\n");
+      i = (i + 1) % frames.length;
+    };
+
+    drawFrame();
+    const interval = setInterval(drawFrame, 1000 / 15);
+    return () => clearInterval(interval);
+  }, [playback]);
 
   const startCamera = async () => {
     setError(null);
+    setPlayback(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
@@ -104,6 +159,7 @@ export default function App() {
     if (preRef.current) preRef.current.innerHTML = "";
     setRunning(false);
     setFps(0);
+    setRecording(false);
     fpsCounterRef.current = { times: [], last: 0 };
   };
 
@@ -123,6 +179,101 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const toggleRecording = () => {
+    if (!recording) {
+      recordedFramesRef.current = [];
+      setRecordedCount(0);
+    }
+    setRecording(r => !r);
+  };
+
+  const triggerDownload = (data: Blob, filename: string) => {
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportVideoText = () => {
+    const dims = recordDimsRef.current;
+    const frames = recordedFramesRef.current;
+    if (!dims || frames.length === 0) return;
+    const text = encodeFramesToText(frames, dims.charset, dims.w, dims.h);
+    triggerDownload(new Blob([text], { type: "text/plain" }), "ascii-video.txt");
+  };
+
+  const exportVideoBinary = async () => {
+    const dims = recordDimsRef.current;
+    const frames = recordedFramesRef.current;
+    if (!dims || frames.length === 0) return;
+    const raw = encodeFramesToBinary(frames, dims.charset, dims.w, dims.h);
+    const compressed = await gzipCompress(raw);
+    triggerDownload(new Blob([compressed as BlobPart], { type: "application/octet-stream" }), "ascii-video.bin.gz");
+  };
+
+  const importVideoBinary = async (file: File) => {
+    setError(null);
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const raw = await gzipDecompress(buf);
+      const decoded = decodeBinaryFrames(raw);
+      stopCamera();
+      setPlayback({
+        frames: decoded.frames,
+        charset: decoded.charset,
+        asciiW: decoded.asciiW,
+        asciiH: decoded.asciiH,
+      });
+      setRunning(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load binary file");
+    }
+  };
+
+  const importVideoText = async (file: File) => {
+    setError(null);
+    try {
+      const text = await file.text();
+      const decoded = decodeTextFrames(text);
+      const charIdx = (ch: string) => {
+        const idx = decoded.charset.indexOf(ch);
+        return idx >= 0 ? idx : 0;
+      };
+      const frames = decoded.frames.map(grid =>
+        grid.map(row => Array.from(row.padEnd(decoded.asciiW, decoded.charset[0] ?? " ")).map(charIdx))
+      );
+      stopCamera();
+      setPlayback({
+        frames,
+        charset: decoded.charset,
+        asciiW: decoded.asciiW,
+        asciiH: decoded.asciiH,
+      });
+      setRunning(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load text file");
+    }
+  };
+
+  const handleFileImport = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.name.endsWith(".gz") || file.name.endsWith(".bin")) {
+      importVideoBinary(file);
+    } else {
+      importVideoText(file);
+    }
+    e.target.value = "";
+  };
+
+  const stopPlayback = () => {
+    setPlayback(null);
+    setRunning(false);
+    if (preRef.current) preRef.current.innerHTML = "";
+  };
+
   return (
     <div className="app-root">
       <video ref={videoRef} style={{ display: "none" }} playsInline muted />
@@ -131,22 +282,51 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-left">
           <span className="brand">▓ AsciiCam</span>
-          {running && <span className="fps-badge">{fps} fps</span>}
+          {running && !playback && <span className="fps-badge">{fps} fps</span>}
+          {playback && <span className="fps-badge">▶ playback</span>}
+          {recording && <span className="error-badge">● rec {recordedCount}</span>}
           {error && <span className="error-badge">⚠ {error}</span>}
         </div>
         <div className="topbar-right">
-          {running && (
+          {running && !playback && (
             <>
               <button className="btn btn-ghost" onClick={copyAscii} title="Copy to clipboard">⎘ Copy</button>
               <button className="btn btn-ghost" onClick={downloadAscii} title="Download .txt">↓ Save</button>
+              <button
+                className={`btn ${recording ? "btn-danger" : "btn-ghost"}`}
+                onClick={toggleRecording}
+                title="Record frames for export"
+              >
+                {recording ? "■ Stop Rec" : "● Record"}
+              </button>
+              <button className="btn btn-ghost" onClick={exportVideoText} title="Export recorded frames as .txt" disabled={recordedCount === 0}>
+                ↓ TXT
+              </button>
+              <button className="btn btn-ghost" onClick={exportVideoBinary} title="Export recorded frames as compressed binary" disabled={recordedCount === 0}>
+                ↓ BIN
+              </button>
             </>
           )}
-          <button
-            className={`btn ${running ? "btn-danger" : "btn-primary"}`}
-            onClick={running ? stopCamera : startCamera}
-          >
-            {running ? "■ Stop" : "▶ Start Camera"}
+          <button className="btn btn-ghost" onClick={() => fileInputRef.current?.click()} title="Import .txt or .bin.gz ASCII video">
+            ↑ Import
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.bin,.gz"
+            style={{ display: "none" }}
+            onChange={handleFileImport}
+          />
+          {playback ? (
+            <button className="btn btn-danger" onClick={stopPlayback}>■ Stop Playback</button>
+          ) : (
+            <button
+              className={`btn ${running ? "btn-danger" : "btn-primary"}`}
+              onClick={running ? stopCamera : startCamera}
+            >
+              {running ? "■ Stop" : "▶ Start Camera"}
+            </button>
+          )}
           <button className="btn btn-ghost panel-toggle" onClick={() => setPanelOpen(o => !o)}>
             {panelOpen ? "◀ Controls" : "▶ Controls"}
           </button>
@@ -158,7 +338,6 @@ export default function App() {
         <div className="ascii-area">
           {!running && (
             <div className="splash">
-              <div className="splash-art">{SPLASH}</div>
               <button className="btn btn-primary btn-lg" onClick={startCamera}>
                 ▶ Start Camera
               </button>
@@ -322,14 +501,3 @@ function frameToHtml(frame: AsciiFrame, color: boolean): string {
   return lines.join("\n");
 }
 
-const SPLASH = `
-  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  ░  ▄▄  ░░  ▄▄▄  ░░  ▄▄▄  ░░░
-  ░ █  █ ░░ █     ░░  ░  ░ ░░░
-  ░ █▀▀█ ░░  ▀▀▀▄ ░░  ░  ░ ░░░
-  ░ █  █ ░░ ▄   █ ░░  ░  ░ ░░░
-  ░ █  █ ░░  ▀▀▀  ░░  ░░░  ░░░
-  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  ░  C A M  →  A S C I I      ░
-  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-`.trim();
