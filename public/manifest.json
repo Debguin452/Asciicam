@@ -1,5 +1,5 @@
 {
-  "name": "AsciiCam-Web",
+  "name": "AsciiCam",
   "short_name": "AsciiCam",
   "description": "Live webcam and image to ASCII art in your browser",
   "start_url": "/",
