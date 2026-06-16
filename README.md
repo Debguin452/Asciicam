@@ -2,7 +2,7 @@
 
 Live webcam and images converted to ASCII art — entirely in your browser. Works offline after first load.
 
-Made by [Deb Guin](https://github.com/Debguin452/Asciicam) · Inspired by [AsciiCam](https://github.com/Harshit-Dhanwalkar/AsciiCam) by Harshit Dhanwalkar · PolyForm Noncommercial License 1.0.0
+Made by [Deb Guin](https://github.com/Debguin452/Asciicam)
 
 ---
 
@@ -115,10 +115,11 @@ Histogram Equalization       Local Contrast Enhancement
                                             ┌─────┴──────────┐
                                             │                │
                                             ▼                ▼
-                                       .asv export     .txt export
-                                     (binary, gzip,   (plain text,
-                                      color stored,    human-readable,
-                                      opts embedded)   importable)
+.mp4 or .gif export     .txt export
+                                     (comming soon!)      (plain text,
+                    human-readable,
+
+                     importable)
 ```
 
 ---
@@ -127,13 +128,10 @@ Histogram Equalization       Local Contrast Enhancement
 
 - **Camera** — live ASCII rendering via Web Worker (off main thread), Temporal Smoothing, auto-saves recordings to Library
 - **Image** — drag-and-drop or upload, real-time re-render as you adjust controls, color preserved
-- **Library** — IndexedDB-backed local library; import `.asv`, `.asp`, `.txt`, `.png`, `.jpg`, `.webp`; play/pause/scrub video items; delete with confirm
-- **Formats** — `.asv` (ASCII video, gzip-compressed binary with embedded charset + settings), `.asp` (single-frame), `.txt` (human-readable)
+- **Library** — IndexedDB-backed local library; import `.txt`, `.png`, `.jpg`, `.webp`; play/pause/scrub video items.
+- **Formats** — `.txt`, [`.mp4` and `.gif` coming soon!]
 - **Rendering modes** — Classic, Dense, Blocks, Edges, Edge Lines, Sketch, Dither (Floyd-Steinberg or Bayer), Color, Braille, High Contrast, Enhanced
 - **Adjustments** — Brightness, Contrast, Gamma, Threshold, Invert, Noise Reduction, Local Contrast, Histogram Equalisation
-- **Themes** — Green, Amber, Cyan, Mono, Paper (green-on-white)
-- **Mobile** — camera-app-style record/capture buttons, swipeable control sections, maximised canvas, works as PWA (add to home screen)
-- **Offline** — full offline support via Service Worker after first load
 
 ---
 
@@ -144,17 +142,6 @@ npm install
 npm run dev
 ```
 
-## Deploy to Cloudflare Pages
-
-1. Push repo to GitHub
-2. Cloudflare Pages → Create → Connect to Git → select repo
-3. Build settings:
-   - **Build command:** `npm run build`
-   - **Build output directory:** `dist`
-4. Deploy
-
-If you see a blank page: confirm output directory is `dist` (not `/`), open browser console — a 404 on `/assets/*.js` means the output directory is misconfigured.
-
 ---
 
 ## Credits & License
@@ -164,4 +151,4 @@ Copyright (c) 2026 Deb Guin (https://github.com/Debguin452/Asciicam)
 Inspired by [AsciiCam](https://github.com/Harshit-Dhanwalkar/AsciiCam) by Harshit Dhanwalkar.
 
 Licensed under the **PolyForm Noncommercial License 1.0.0** — see [LICENSE.md](./LICENSE.md).
-Free for personal, educational, and noncommercial use. Commercial use is not permitted.
+Free for personal, educational, and noncommercial use. **Commercial use is not permitted**.
