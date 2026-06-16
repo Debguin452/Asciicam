@@ -2,11 +2,7 @@
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>
 
-Copyright (c) 2026 Deb Guin (https://github.com/Debguin452/Asciicam)
-
-Required Notice: This project is derived from / inspired by AsciiCam by
-Harshit Dhanwalkar (https://github.com/Harshit-Dhanwalkar/AsciiCam),
-licensed under the PolyForm Noncommercial License 1.0.0.
+Copyright (c) 2026 **Deb Guin** (https://github.com/Debguin452/Asciicam)
 
 ## Acceptance
 
