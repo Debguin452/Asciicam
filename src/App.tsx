@@ -32,7 +32,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="brand-prompt">$</span>
-          <span className="brand-name">asciicam</span>
+          <span className="brand-name">asciiweb</span>
           <span className="brand-cursor">_</span>
         </div>
         <nav className="tab-bar">
