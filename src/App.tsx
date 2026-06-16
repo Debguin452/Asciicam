@@ -1,48 +1,38 @@
 import { useState } from "react";
-import { DEFAULT_CHARSET, type AsciiOptions } from "./lib/ascii";
+import { DEFAULT_OPTIONS, type AsciiOptions } from "./lib/ascii";
 import { THEMES, type Tab, type ThemeName } from "./types";
 import CameraTab from "./components/CameraTab";
 import ImageTab from "./components/ImageTab";
 import LibraryTab from "./components/LibraryTab";
 import AboutTab from "./components/AboutTab";
 
-const DEFAULT_OPTS: AsciiOptions = {
-  asciiW: 120,
-  asciiH: 50,
-  brightness: 0,
-  contrast: 100,
-  threshold: 0,
-  invert: false,
-  color: false,
-  edges: false,
-  dither: false,
-  charset: DEFAULT_CHARSET,
-};
-
 export default function App() {
   const [tab, setTab] = useState<Tab>("camera");
   const [theme, setTheme] = useState<ThemeName>("green");
-  const [opts, setOpts] = useState<AsciiOptions>({ ...DEFAULT_OPTS });
+  const [opts, setOpts] = useState<AsciiOptions>({ ...DEFAULT_OPTIONS });
   const [fontSize, setFontSize] = useState(10);
   const [libraryKey, setLibraryKey] = useState(0);
 
   const updateOpt = <K extends keyof AsciiOptions>(key: K, val: AsciiOptions[K]) =>
     setOpts(o => ({ ...o, [key]: val }));
 
-  const resetOpts = () => setOpts({ ...DEFAULT_OPTS });
+  const resetOpts = () => setOpts({ ...DEFAULT_OPTIONS });
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "camera", label: "Camera" },
-    { id: "image", label: "Image" },
-    { id: "library", label: "Library" },
-    { id: "about", label: "About" },
+    { id: "image",   label: "Image"  },
+    { id: "library", label: "Library"},
+    { id: "about",   label: "About"  },
   ];
 
+  const isLight = THEMES.find(t => t.id === theme)?.light ?? false;
+
   return (
-    <div className="app-root" data-theme={theme}>
+    <div className={`app-root${isLight ? " app-light" : ""}`} data-theme={theme}>
       <header className="topbar">
         <div className="brand">
-          <span className="brand-name">AsciiCam</span>
+          <span className="brand-prompt">$</span>
+          <span className="brand-name">asciicam</span>
           <span className="brand-cursor">_</span>
         </div>
         <nav className="tab-bar">
@@ -86,6 +76,7 @@ export default function App() {
             fontSize={fontSize}
             setFontSize={setFontSize}
             onReset={resetOpts}
+            onLibraryUpdated={() => setLibraryKey(k => k + 1)}
           />
         )}
         {tab === "library" && (
