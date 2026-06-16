@@ -3,11 +3,13 @@ export interface LibraryItem {
   name: string;
   createdAt: number;
   source: "recording" | "import";
+  kind: "video" | "image";
   charset: string;
   asciiW: number;
   asciiH: number;
   frameCount: number;
   frames: number[][][];
+  colorFrames?: number[][][][];
   thumbnail: string;
 }
 
@@ -67,12 +69,12 @@ export function makeThumbnail(frames: number[][][], charset: string, asciiW: num
   const frame = frames[Math.floor(frames.length / 2)] ?? frames[0];
   if (!frame) return "";
   const lines: string[] = [];
-  const maxRows = Math.min(asciiH, 10);
+  const maxRows = Math.min(asciiH, 12);
   const step = Math.max(1, Math.floor(asciiW / 40));
   for (let y = 0; y < maxRows; y++) {
     let line = "";
     for (let x = 0; x < asciiW; x += step) {
-      line += charset[frame[y][x]] ?? " ";
+      line += charset[frame[y]?.[x] ?? 0] ?? " ";
     }
     lines.push(line);
   }
