@@ -26,12 +26,12 @@ export interface AsciiOptions {
 }
 
 export const DEFAULT_OPTIONS: AsciiOptions = {
-  asciiW: 120,
-  asciiH: 50,
-  brightness: 0,
-  contrast: 100,
+  asciiW: 140,
+  asciiH: 80,
+  brightness: -30,
+  contrast: 180,
   threshold: 0,
-  gamma: 1.0,
+  gamma: 1.1,
   invert: false,
   color: false,
   edges: false,
