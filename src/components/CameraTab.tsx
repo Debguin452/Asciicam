@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getSortedCharset, resetTemporalSmoothing, DEFAULT_CHARSET, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
-import { encodeAsv, encodeFramesToText } from "../lib/format";
+import { processFrame, frameToHtml, resetTemporalSmoothing, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
 import { saveLibraryItem, makeThumbnail, genId } from "../lib/library";
-import { makeFilename } from "../types";
+import { exportGif, exportMp4, exportPng, exportJpeg, framesToText } from "../lib/export";
+import { makeFilename, triggerDownload, getThemeColors } from "../types";
 import ControlsPanel from "./ControlsPanel";
-import Modal from "./Modal";
-import AsciiWorker from "../lib/ascii.worker?worker";
 
 interface Props {
   opts: AsciiOptions;
@@ -16,292 +14,324 @@ interface Props {
   onLibraryUpdated: () => void;
 }
 
+type Stage = "idle" | "live" | "recording" | "choosing" | "exporting";
+
 export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const offscreen = useRef<HTMLCanvasElement>(document.createElement("canvas"));
+  const offscreen = useRef(document.createElement("canvas"));
   const preRef = useRef<HTMLPreElement>(null);
-  const rafRef = useRef<number>(0);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(null);
-  const fpsTimesRef = useRef<number[]>([]);
+  const optsRef = useRef(opts);
   const recordedRef = useRef<AsciiFrame[]>([]);
-  const captureOptsRef = useRef<AsciiOptions>(opts);
-  const workerRef = useRef<Worker | null>(null);
-  const pendingRef = useRef(false);
+  const liveFpsRef = useRef(15);
+  const fpsTimesRef = useRef<number[]>([]);
+  const lastFrameRef = useRef<AsciiFrame | null>(null);
+  const stageRef = useRef<Stage>("idle");
 
-  const [running, setRunning] = useState(false);
+  const [stage, setStageState] = useState<Stage>("idle");
+  const [capturedCount, setCapturedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [recording, setRecording] = useState(false);
   const [recCount, setRecCount] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [confirm, setConfirm] = useState<"stop-save" | "discard" | null>(null);
-  const [lastSaved, setLastSaved] = useState<string | null>(null);
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 720);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [exportStatus, setExportStatus] = useState("");
+  const [isMobile] = useState(() => window.innerWidth <= 720);
 
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth <= 720);
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
+  const setStage = (s: Stage) => { stageRef.current = s; setStageState(s); };
 
-  useEffect(() => { captureOptsRef.current = opts; }, [opts]);
+  useEffect(() => { optsRef.current = opts; }, [opts]);
 
-  useEffect(() => {
-    try {
-      const w = new AsciiWorker();
-      workerRef.current = w;
-      return () => w.terminate();
-    } catch { /* fallback to main thread */ }
-  }, []);
-
-  const renderFrameMain = useCallback(() => {
+  const renderLoop = useCallback(() => {
     const video = videoRef.current;
     const pre = preRef.current;
     if (!video || !pre || video.readyState < 2) {
-      rafRef.current = requestAnimationFrame(renderFrameMain);
+      rafRef.current = requestAnimationFrame(renderLoop);
       return;
     }
-
-    const { asciiW, asciiH, color } = captureOptsRef.current;
-    offscreen.current.width = asciiW;
-    offscreen.current.height = asciiH;
-    const ctx = offscreen.current.getContext("2d", { willReadFrequently: true })!;
-    ctx.save(); ctx.scale(-1, 1); ctx.drawImage(video, -asciiW, 0, asciiW, asciiH); ctx.restore();
-    const imgData = ctx.getImageData(0, 0, asciiW, asciiH);
-
-    const worker = workerRef.current;
-    if (worker && !pendingRef.current) {
-      pendingRef.current = true;
-      worker.onmessage = (e: MessageEvent) => {
-        if (e.data.type !== "result") return;
-        if (preRef.current) preRef.current.innerHTML = e.data.html;
-        if (recording) {
-          const o = captureOptsRef.current;
-          const charset = o.charset || DEFAULT_CHARSET;
-          const sorted = getSortedCharset(charset, o.charDensitySort);
-          const frame: AsciiFrame = (e.data.indices as number[][]).map(row =>
-            row.map((ci) => ({ char: sorted[ci] ?? " ", charIdx: ci, r: 0, g: 0, b: 0 }))
-          );
-          recordedRef.current.push(frame);
-          setRecCount(recordedRef.current.length);
-        }
-        pendingRef.current = false;
-      };
-      worker.postMessage({ type: "frame", data: { pixels: imgData.data, opts: captureOptsRef.current } });
+    const frame = processFrame(video, offscreen.current, optsRef.current, true);
+    if (frame) {
+      lastFrameRef.current = frame;
+      pre.innerHTML = frameToHtml(frame, optsRef.current.color);
+      if (stageRef.current === "recording") {
+        recordedRef.current.push(frame);
+        setRecCount(c => c + 1);
+      }
+      const now = performance.now();
+      fpsTimesRef.current.push(now);
+      if (fpsTimesRef.current.length > 30) fpsTimesRef.current.shift();
+      if (fpsTimesRef.current.length > 1) {
+        const f = Math.round((fpsTimesRef.current.length - 1) / (now - fpsTimesRef.current[0]) * 1000);
+        setFps(f);
+        liveFpsRef.current = f || 15;
+      }
     }
-
-    const now = performance.now();
-    fpsTimesRef.current.push(now);
-    if (fpsTimesRef.current.length > 30) fpsTimesRef.current.shift();
-    if (fpsTimesRef.current.length > 1) {
-      const elapsed = fpsTimesRef.current.at(-1)! - fpsTimesRef.current[0];
-      setFps(Math.round(((fpsTimesRef.current.length - 1) / elapsed) * 1000));
-    }
-
-    rafRef.current = requestAnimationFrame(renderFrameMain);
-  }, [recording]);
+    rafRef.current = requestAnimationFrame(renderLoop);
+  }, []);
 
   useEffect(() => {
-    if (running) rafRef.current = requestAnimationFrame(renderFrameMain);
+    if (stage === "live" || stage === "recording") {
+      rafRef.current = requestAnimationFrame(renderLoop);
+    }
     return () => cancelAnimationFrame(rafRef.current);
-  }, [running, renderFrameMain]);
+  }, [stage, renderLoop]);
 
   useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
 
-  const startCamera = async () => {
-    setError(null);
-    resetTemporalSmoothing();
-    workerRef.current?.postMessage({ type: "reset" });
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
-      setRunning(true);
-    } catch (e) { setError(e instanceof Error ? e.message : "Camera access denied"); }
-  };
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      const s = stageRef.current;
+      if (e.code === "Space") { e.preventDefault(); if (s === "idle") startCamera(); else if (s === "live" || s === "recording") stopAndChoose(); }
+      if (e.code === "KeyR" && s === "live") startRecording();
+      if (e.code === "KeyR" && s === "recording") stopAndChoose();
+      if (e.code === "KeyC" && (s === "live" || s === "recording")) captureFrame();
+      if (e.code === "Escape") setPanelOpen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
-  const stopCamera = () => {
+  const stopStream = () => {
     cancelAnimationFrame(rafRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
+  };
+
+  const startCamera = async () => {
+    setError(null);
+    resetTemporalSmoothing();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      streamRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+      setStage("live");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Camera access denied");
+    }
+  };
+
+  const stopCamera = () => {
+    stopStream();
     if (preRef.current) preRef.current.innerHTML = "";
-    setRunning(false); setFps(0); setRecording(false);
+    recordedRef.current = [];
+    setStage("idle"); setFps(0); setRecCount(0); setCapturedCount(0);
     fpsTimesRef.current = [];
     resetTemporalSmoothing();
   };
 
+  const startRecording = () => {
+    recordedRef.current = [];
+    setRecCount(0);
+    setStage("recording");
+  };
+
   const captureFrame = () => {
-    if (!preRef.current) return;
-    const text = preRef.current.innerText;
-    triggerDownload(new Blob([text], { type: "text/plain" }), makeFilename("asciiphoto", "txt"));
+    stopStream();
+    const frame = lastFrameRef.current;
+    recordedRef.current = frame ? [frame] : [];
+    setCapturedCount(recordedRef.current.length);
+    setStage("choosing");
   };
 
-  const startRecording = () => { recordedRef.current = []; setRecCount(0); setLastSaved(null); setRecording(true); };
-  const stopRecordingAndSave = () => setConfirm("stop-save");
-  const discardRecording = () => setConfirm("discard");
+  const stopAndChoose = () => {
+    stopStream();
+    setCapturedCount(recordedRef.current.length);
+    setStage("choosing");
+  };
 
-  const doSave = async (format: "asv" | "txt") => {
+  const discard = () => {
+    recordedRef.current = [];
+    setRecCount(0); setCapturedCount(0);
+    if (preRef.current) preRef.current.innerHTML = "";
+    setStage("idle");
+  };
+
+  const doExport = async (format: "txt" | "png" | "jpeg" | "gif" | "mp4") => {
     const frames = recordedRef.current;
-    if (!frames.length) return;
-    setSaving(true);
-    const o = captureOptsRef.current;
-    const charset = o.charset || DEFAULT_CHARSET;
+    const isMulti = frames.length > 1;
+    const o = optsRef.current;
+    const { fg, bg } = getThemeColors();
+    setStage("exporting");
+    setExportStatus(`Generating ${format.toUpperCase()}…`);
     try {
-      if (format === "asv") {
-        const { data } = await encodeAsv(frames, charset, o.asciiW, o.asciiH, o.color, fps || 15, o);
-        triggerDownload(new Blob([data as BlobPart]), makeFilename("asciivideo", "asv"));
-      } else {
-        const text = encodeFramesToText(frames, charset, o.asciiW, o.asciiH);
-        triggerDownload(new Blob([text], { type: "text/plain" }), makeFilename("asciivideo", "txt"));
+      if (format === "txt") {
+        const text = frames.length ? framesToText(frames) : (preRef.current?.innerText ?? "");
+        triggerDownload(new Blob([text], { type: "text/plain" }), makeFilename("ascii", "txt"));
+      } else if (format === "png") {
+        const f = frames[0]; if (!f) throw new Error("No frame");
+        triggerDownload(await exportPng(f, fontSize, fg, bg, o.color), makeFilename("ascii", "png"));
+      } else if (format === "jpeg") {
+        const f = frames[0]; if (!f) throw new Error("No frame");
+        triggerDownload(await exportJpeg(f, fontSize, fg, bg, o.color), makeFilename("ascii", "jpg"));
+      } else if (format === "gif") {
+        if (!isMulti) throw new Error("No frames for GIF");
+        triggerDownload(await exportGif(frames, fontSize, fg, bg, o.color, liveFpsRef.current), makeFilename("ascii", "gif"));
+      } else if (format === "mp4") {
+        if (!isMulti) throw new Error("No frames for MP4");
+        const blob = await exportMp4(frames, fontSize, fg, bg, o.color, liveFpsRef.current);
+        triggerDownload(blob, makeFilename("ascii", blob.type.includes("webm") ? "webm" : "mp4"));
       }
-      await autoSaveToLibrary(frames, charset, o);
-    } finally { setSaving(false); setRecording(false); setConfirm(null); }
+      await saveToLibrary(frames, o);
+      onLibraryUpdated();
+      setStage("idle");
+      recordedRef.current = [];
+      setRecCount(0); setCapturedCount(0);
+      if (preRef.current) preRef.current.innerHTML = "";
+    } catch (err) {
+      console.error(err);
+      setExportStatus("Export failed — " + (err instanceof Error ? err.message : "unknown"));
+      setTimeout(() => setStage("choosing"), 2000);
+    }
   };
 
-  const autoSaveToLibrary = async (frames: AsciiFrame[], charset: string, o: AsciiOptions) => {
+  const saveToLibrary = async (frames: AsciiFrame[], o: AsciiOptions) => {
+    if (!frames.length) return;
+    const charset = o.charset || " .:-=+*#%@";
     const idxFrames = frames.map(f => f.map(row => row.map(c => c.charIdx)));
     const colorFrames = o.color ? frames.map(f => f.map(row => row.map(c => [c.r, c.g, c.b]))) : undefined;
-    const name = makeFilename("rec", "asv");
     await saveLibraryItem({
-      id: genId(), name, createdAt: Date.now(), source: "recording", kind: "video",
+      id: genId(),
+      name: makeFilename(frames.length > 1 ? "rec" : "capture", "txt"),
+      createdAt: Date.now(), source: "recording",
+      kind: frames.length > 1 ? "video" : "image",
       charset, asciiW: o.asciiW, asciiH: o.asciiH,
       frameCount: idxFrames.length, frames: idxFrames, colorFrames,
       thumbnail: makeThumbnail(idxFrames, charset, o.asciiW, o.asciiH),
+      fps: liveFpsRef.current,
     });
-    onLibraryUpdated();
-    setLastSaved(name);
   };
+
+  const isMulti = capturedCount > 1;
 
   return (
     <div className="tab-content">
       <video ref={videoRef} style={{ display: "none" }} playsInline muted />
 
-      {/* Desktop toolbar */}
-      {!isMobile && (
-        <div className="toolbar">
-          <div className="toolbar-left">
-            {running && <span className={`fps-badge${fps < 8 ? " fps-low" : ""}`}>{fps} fps</span>}
-            {recording && <span className="rec-badge">● REC {recCount}</span>}
-            {lastSaved && <span className="fps-badge">✓ saved</span>}
-            {error && <span className="error-badge">⚠ {error}</span>}
-          </div>
-          <div className="toolbar-right">
-            {running && !recording && (
-              <>
-                <button className="btn btn-ghost" onClick={() => navigator.clipboard.writeText(preRef.current?.innerText ?? "")}>Copy</button>
-                <button className="btn btn-ghost" onClick={captureFrame} disabled={saving}>Save Frame</button>
-                <button className="btn btn-primary" onClick={startRecording}>● Record</button>
-              </>
-            )}
-            {running && recording && (
-              <>
-                <button className="btn btn-danger" onClick={stopRecordingAndSave} disabled={saving}>■ Stop & Save</button>
-                <button className="btn btn-ghost" onClick={discardRecording}>Discard</button>
-              </>
-            )}
-            <button className={`btn ${running ? "btn-danger" : "btn-primary"}`} onClick={running ? stopCamera : startCamera}>
-              {running ? "Stop" : "Start Camera"}
-            </button>
+      <div className="toolbar">
+        <div className="toolbar-left">
+          {(stage === "live" || stage === "recording") && (
+            <span className={`badge${fps < 8 ? " badge-warn" : ""}`}>{fps} fps</span>
+          )}
+          {stage === "recording" && <span className="badge badge-rec">● REC {recCount}f</span>}
+          {error && <span className="badge badge-err">⚠ {error}</span>}
+        </div>
+        <div className="toolbar-right">
+          {stage === "idle" && (
+            <button className="btn btn-primary" onClick={startCamera}>Start Camera</button>
+          )}
+          {stage === "live" && (
+            <>
+              <button className="btn btn-ghost" onClick={() => navigator.clipboard.writeText(preRef.current?.innerText ?? "")}>Copy</button>
+              <button className="btn btn-ghost" onClick={captureFrame}>Capture</button>
+              <button className="btn btn-primary" onClick={startRecording}>● Record</button>
+              <button className="btn btn-ghost" onClick={stopCamera}>Stop</button>
+            </>
+          )}
+          {stage === "recording" && (
+            <>
+              <button className="btn btn-danger" onClick={stopAndChoose}>■ Stop</button>
+              <button className="btn btn-ghost" onClick={discard}>Discard</button>
+            </>
+          )}
+          {(stage === "live" || stage === "recording") && (
             <button className="btn btn-ghost" onClick={() => setPanelOpen(o => !o)}>
-              {panelOpen ? "▼" : "▲"} Controls
+              Controls {panelOpen ? "▲" : "▼"}
             </button>
-          </div>
+          )}
         </div>
-      )}
-
-      {/* Mobile status bar */}
-      {isMobile && running && (
-        <div className="toolbar">
-          <div className="toolbar-left">
-            <span className={`fps-badge${fps < 8 ? " fps-low" : ""}`}>{fps} fps</span>
-            {recording && <span className="rec-badge">● REC {recCount}</span>}
-            {error && <span className="error-badge">⚠ {error}</span>}
-          </div>
-          <div className="toolbar-right">
-            <button className="btn btn-ghost btn-sm" onClick={stopCamera}>Stop</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => setPanelOpen(o => !o)}>Controls</button>
-          </div>
-        </div>
-      )}
+      </div>
 
       <div className="main-layout">
-        <div className="ascii-area">
-          {!running && (
+        <div ref={areaRef} className="ascii-area" style={{ right: panelOpen && (stage === "live" || stage === "recording") ? 220 : 0 }}>
+          {stage === "idle" && (
             <div className="splash">
               <button className="btn btn-primary btn-lg" onClick={startCamera}>Start Camera</button>
-              <p className="splash-hint">Live video → ASCII art · fully in your browser</p>
+              <p className="splash-hint">Live video → ASCII art · runs in your browser</p>
               <p className="splash-hint">Works offline after first load</p>
-              {error && <p className="error-badge">⚠ {error}</p>}
+              {error && <p className="badge badge-err" style={{ marginTop: 8 }}>⚠ {error}</p>}
+              <p className="splash-hint" style={{ marginTop: 8, fontSize: 10 }}>
+                Space · start/stop &nbsp; R · record &nbsp; C · capture &nbsp; Esc · close panel
+              </p>
             </div>
           )}
           <pre ref={preRef} className="ascii-output" style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }} />
         </div>
-        {panelOpen && (
-          <ControlsPanel opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={onReset} />
+        {panelOpen && (stage === "live" || stage === "recording") && (
+          <div className="controls-panel-wrap">
+            <ControlsPanel opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={onReset} />
+          </div>
         )}
       </div>
 
-      {/* Mobile camera-app controls */}
-      {isMobile && running && (
+      {isMobile && (stage === "live" || stage === "recording") && (
         <div className="cam-controls-mobile">
-          <button
-            className="cam-side-btn"
-            onClick={() => navigator.clipboard.writeText(preRef.current?.innerText ?? "")}
-            title="Copy"
-          >⎘</button>
-          {!recording ? (
+          <button className="cam-side-btn" onClick={() => navigator.clipboard.writeText(preRef.current?.innerText ?? "")} title="Copy">⎘</button>
+          {stage === "live" ? (
             <>
-              <button className="cam-capture-btn" onClick={captureFrame} title="Capture frame" />
-              <button className="cam-record-btn" onClick={startRecording} title="Start recording">●</button>
+              <button className="cam-capture-btn" onClick={captureFrame} title="Capture" />
+              <button className="cam-record-btn" onClick={startRecording} title="Record">●</button>
             </>
           ) : (
             <>
-              <button className="cam-side-btn" onClick={discardRecording} title="Discard">✕</button>
-              <button className={`cam-record-btn recording`} onClick={stopRecordingAndSave} title="Stop & save">■</button>
+              <button className="cam-side-btn" onClick={discard} title="Discard">✕</button>
+              <button className="cam-record-btn recording" onClick={stopAndChoose} title="Stop">■</button>
             </>
           )}
-          <button
-            className="cam-side-btn"
-            onClick={captureFrame}
-            title="Save frame"
-          >↓</button>
+          <button className="cam-side-btn" onClick={() => setPanelOpen(o => !o)} title="Controls">⚙</button>
         </div>
       )}
 
-      {confirm === "stop-save" && (
-        <Modal
-          title="Save Recording"
-          message={`Save ${recCount} frames? Choose format — .asv is recommended (compact, re-importable).`}
-          confirmLabel="Save .asv"
-          cancelLabel="Save .txt"
-          onConfirm={() => doSave("asv")}
-          onCancel={() => doSave("txt")}
-          extraAction={{ label: "Discard", onClick: () => { setRecording(false); setConfirm(null); }, danger: true }}
-        />
+      {stage === "choosing" && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-title">Choose Output</div>
+            <div className="modal-message">
+              {isMulti ? `${capturedCount} frames recorded.` : "Single frame captured."} Select format:
+            </div>
+            <div className="export-grid">
+              <button className="export-opt" onClick={() => doExport("txt")}>
+                <span className="export-opt-icon">TXT</span>
+                <span className="export-opt-label">Plain text</span>
+              </button>
+              <button className="export-opt" onClick={() => doExport("png")}>
+                <span className="export-opt-icon">PNG</span>
+                <span className="export-opt-label">Image</span>
+              </button>
+              <button className="export-opt" onClick={() => doExport("jpeg")}>
+                <span className="export-opt-icon">JPG</span>
+                <span className="export-opt-label">Image</span>
+              </button>
+              {isMulti && (
+                <>
+                  <button className="export-opt" onClick={() => doExport("gif")}>
+                    <span className="export-opt-icon">GIF</span>
+                    <span className="export-opt-label">Animated</span>
+                  </button>
+                  <button className="export-opt" onClick={() => doExport("mp4")}>
+                    <span className="export-opt-icon">MP4</span>
+                    <span className="export-opt-label">Video</span>
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={discard}>Discard</button>
+            </div>
+          </div>
+        </div>
       )}
-      {confirm === "discard" && (
-        <Modal
-          title="Discard Recording"
-          message={`Discard all ${recCount} recorded frames? This cannot be undone.`}
-          confirmLabel="Discard"
-          cancelLabel="Keep Recording"
-          onConfirm={() => { recordedRef.current = []; setRecording(false); setConfirm(null); }}
-          onCancel={() => setConfirm(null)}
-          danger
-        />
+
+      {stage === "exporting" && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-title">Exporting</div>
+            <div className="modal-message">{exportStatus}</div>
+          </div>
+        </div>
       )}
     </div>
   );
-}
-
-function triggerDownload(data: Blob, filename: string) {
-  const url = URL.createObjectURL(data);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
 }
