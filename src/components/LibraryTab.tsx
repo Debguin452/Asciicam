@@ -19,15 +19,18 @@ export default function LibraryTab({ fontSize, refreshKey, onEdit }: Props) {
   const [loaded, setLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const load = async () => {
-    try {
-      const result = await getLibraryItems();
-      setItems(result);
-    } catch {
-      setItems([]);
-    } finally {
-      setLoaded(true);
-    }
+  const load = () => {
+    setLoaded(false);
+    setTimeout(async () => {
+      try {
+        const result = await getLibraryItems();
+        setItems(result);
+      } catch {
+        setItems([]);
+      } finally {
+        setLoaded(true);
+      }
+    }, 0);
   };
 
   useEffect(() => { load(); }, [refreshKey]);
