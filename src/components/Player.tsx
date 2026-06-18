@@ -1,72 +1,89 @@
 import { useEffect, useRef, useState } from "react";
+import { frameToHtml } from "../lib/ascii";
+import type { LibraryItem } from "../lib/library";
 
-interface PlayerProps {
-  frames: number[][][];
-  colorFrames?: number[][][][];
-  charset: string;
-  asciiW: number;
-  asciiH: number;
+interface Props {
+  item: LibraryItem;
   fontSize: number;
-  fps?: number;
-  isImage?: boolean;
 }
 
-export default function Player({ frames, colorFrames, charset, asciiW, asciiH, fontSize, fps = 15, isImage }: PlayerProps) {
+export default function Player({ item, fontSize }: Props) {
   const preRef = useRef<HTMLPreElement>(null);
-  const [playing, setPlaying] = useState(!isImage);
-  const [index, setIndex] = useState(0);
-  const [speed, setSpeed] = useState(1);
-  const indexRef = useRef(0);
+  const rafRef = useRef<number>(0);
+  const lastTimeRef = useRef<number>(0);
+  const [playing, setPlaying] = useState(false);
+  const [frameIdx, setFrameIdx] = useState(0);
+  const playingRef = useRef(false);
+  const frameIdxRef = useRef(0);
+  const fps = item.fps ?? 15;
 
-  const draw = (i: number) => {
+  const charset = item.charset || " .:-=+*#%@";
+
+  const renderFrame = (idx: number) => {
     const pre = preRef.current;
-    if (!pre || !frames[i]) return;
-    const grid = frames[i];
-    const cf = colorFrames?.[i];
-    const lines: string[] = [];
-    for (let y = 0; y < asciiH; y++) {
-      if (!grid[y]) { lines.push(""); continue; }
-      if (cf) {
-        let line = "";
-        for (let x = 0; x < asciiW; x++) {
-          const ch = charset[grid[y][x]] ?? " ";
-          const rgb = cf[y]?.[x];
-          const out = ch === " " ? "\u00a0" : ch;
-          if (rgb) line += `<span style="color:rgb(${rgb[0]},${rgb[1]},${rgb[2]})">${out}</span>`;
-          else line += out;
-        }
-        lines.push(line);
-      } else {
-        let line = "";
-        for (let x = 0; x < asciiW; x++) {
-          const ch = charset[grid[y][x]] ?? " ";
-          line += ch === " " ? "\u00a0" : ch;
-        }
-        lines.push(line);
-      }
-    }
-    if (cf) pre.innerHTML = lines.join("\n");
-    else pre.textContent = lines.join("\n");
+    if (!pre) return;
+    const frame = item.frames[idx];
+    if (!frame) return;
+    const colorFrame = item.colorFrames?.[idx];
+    const html = colorFrame
+      ? frame.map((row, y) =>
+          row.map((ci, x) => {
+            const c = colorFrame[y]?.[x];
+            const ch = charset[ci] ?? " ";
+            if (ch === " ") return "\u00a0";
+            if (!c) return ch;
+            return `<span style="color:rgb(${c[0]},${c[1]},${c[2]})">${ch}</span>`;
+          }).join("")
+        ).join("\n")
+      : frame.map(row =>
+          row.map(ci => {
+            const ch = charset[ci] ?? " ";
+            return ch === " " ? "\u00a0" : ch;
+          }).join("")
+        ).join("\n");
+    pre.innerHTML = html;
   };
-
-  useEffect(() => { draw(index); }, [index, frames, colorFrames]);
 
   useEffect(() => {
-    if (!playing || isImage || frames.length <= 1) return;
-    const id = window.setInterval(() => {
-      indexRef.current = (indexRef.current + 1) % frames.length;
-      setIndex(indexRef.current);
-    }, 1000 / (fps * speed));
-    return () => clearInterval(id);
-  }, [playing, frames.length, fps, speed, isImage]);
+    renderFrame(0);
+  }, [item]);
 
-  const skip = (delta: number) => {
-    const n = Math.max(0, Math.min(frames.length - 1, index + delta));
-    setIndex(n);
-    indexRef.current = n;
+  useEffect(() => {
+    renderFrame(frameIdx);
+  }, [frameIdx]);
+
+  const tick = (ts: number) => {
+    if (!playingRef.current) return;
+    const interval = 1000 / fps;
+    if (ts - lastTimeRef.current >= interval) {
+      lastTimeRef.current = ts;
+      const next = (frameIdxRef.current + 1) % item.frameCount;
+      frameIdxRef.current = next;
+      setFrameIdx(next);
+    }
+    rafRef.current = requestAnimationFrame(tick);
   };
 
-  const isVideo = !isImage && frames.length > 1;
+  const play = () => {
+    playingRef.current = true;
+    setPlaying(true);
+    lastTimeRef.current = performance.now();
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  const pause = () => {
+    playingRef.current = false;
+    setPlaying(false);
+    cancelAnimationFrame(rafRef.current);
+  };
+
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
+
+  const scrub = (v: number) => {
+    pause();
+    frameIdxRef.current = v;
+    setFrameIdx(v);
+  };
 
   return (
     <div className="player">
@@ -75,34 +92,20 @@ export default function Player({ frames, colorFrames, charset, asciiW, asciiH, f
         className="ascii-output"
         style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }}
       />
-      {isVideo && (
+      {item.kind === "video" && item.frameCount > 1 && (
         <div className="player-controls">
-          <button className="btn btn-ghost btn-sm" onClick={() => { setIndex(0); indexRef.current = 0; }} title="Restart">⏮</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => skip(-10)} title="-10 frames">⏪</button>
-          <button className="btn btn-primary btn-sm" onClick={() => setPlaying(p => !p)}>
+          <button className="btn btn-ghost btn-sm" onClick={playing ? pause : play}>
             {playing ? "⏸" : "▶"}
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => skip(10)} title="+10 frames">⏩</button>
-          <select
-            className="speed-select"
-            value={speed}
-            onChange={e => setSpeed(Number(e.target.value))}
-          >
-            <option value={0.25}>0.25×</option>
-            <option value={0.5}>0.5×</option>
-            <option value={1}>1×</option>
-            <option value={2}>2×</option>
-            <option value={4}>4×</option>
-          </select>
           <input
             type="range"
-            min={0}
-            max={frames.length - 1}
-            value={index}
-            onChange={e => { const n = Number(e.target.value); setIndex(n); indexRef.current = n; }}
             className="slider player-scrub"
+            min={0}
+            max={item.frameCount - 1}
+            value={frameIdx}
+            onChange={e => scrub(Number(e.target.value))}
           />
-          <span className="player-frame-count">{index + 1}/{frames.length}</span>
+          <span className="player-frame-count">{frameIdx + 1} / {item.frameCount}</span>
         </div>
       )}
     </div>
