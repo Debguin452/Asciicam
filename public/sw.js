@@ -1,4 +1,4 @@
-const CACHE = "asciicam-v1";
+const CACHE = "asciiweb-v1";
 
 self.addEventListener("install", e => {
   e.waitUntil(

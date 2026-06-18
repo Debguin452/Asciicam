@@ -1,11 +1,11 @@
 {
-  "name": "AsciiCam",
-  "short_name": "AsciiCam",
-  "description": "Live webcam and image to ASCII art in your browser",
+  "name": "asciiweb",
+  "short_name": "asciiweb",
+  "description": "Live ASCII art camera and image converter",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0a",
-  "theme_color": "#0a0a0a",
+  "background_color": "#060606",
+  "theme_color": "#060606",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
