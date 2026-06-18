@@ -245,7 +245,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       </div>
 
       <div className="main-layout">
-        <div ref={areaRef} className="ascii-area" style={{ right: panelOpen && (stage === "live" || stage === "recording") ? 220 : 0 }}>
+        <div ref={areaRef} className="ascii-area">
           {stage === "idle" && (
             <div className="splash">
               <button className="btn btn-primary btn-lg" onClick={startCamera}>Start Camera</button>

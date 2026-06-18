@@ -305,7 +305,7 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
       </div>
 
       <div className="main-layout">
-        <div className="ascii-area" style={{ right: panelOpen && isReady && !editMode ? 220 : 0 }} onDrop={onDrop} onDragOver={e => e.preventDefault()}>
+        <div className="ascii-area" onDrop={onDrop} onDragOver={e => e.preventDefault()}>
           {!isReady && (
             <div className="splash">
               <button className="btn btn-primary btn-lg" onClick={() => fileInputRef.current?.click()}>Upload Image</button>
