@@ -7,14 +7,10 @@ import LibraryTab from "./components/LibraryTab";
 import AboutTab from "./components/AboutTab";
 import type { LibraryItem } from "./lib/library";
 
-function pickRandomTheme(): ThemeName {
-  const ids = THEMES.map(t => t.id);
-  return ids[Math.floor(Math.random() * ids.length)];
-}
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("camera");
-  const [theme, setTheme] = useState<ThemeName>(pickRandomTheme);
+  const [theme, setTheme] = useState<ThemeName>("green");
   const [themeOpen, setThemeOpen] = useState(false);
   const [opts, setOpts] = useState<AsciiOptions>({ ...DEFAULT_OPTIONS });
   const [fontSize, setFontSize] = useState(10);
@@ -26,7 +22,17 @@ export default function App() {
     setOpts(o => ({ ...o, [key]: val }));
   const resetOpts = () => setOpts({ ...DEFAULT_OPTIONS });
 
-  const changeTheme = (t: ThemeName) => { setTheme(t); setThemeOpen(false); };
+  const prevIsLight = useRef(false);
+
+  const changeTheme = (t: ThemeName) => {
+    const nextIsLight = THEMES.find(th => th.id === t)?.light ?? false;
+    if (nextIsLight !== prevIsLight.current) {
+      setOpts(o => ({ ...o, invert: nextIsLight }));
+      prevIsLight.current = nextIsLight;
+    }
+    setTheme(t);
+    setThemeOpen(false);
+  };
 
   useEffect(() => {
     const close = (e: MouseEvent) => {

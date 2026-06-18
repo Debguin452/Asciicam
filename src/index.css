@@ -18,7 +18,7 @@
 [data-theme="amber"] { --fg:#ffb000; --fg-dim:#a07010; --fg-faint:#5a3e08; --glow:rgba(255,176,0,0.08); --glow-strong:rgba(255,176,0,0.18); }
 [data-theme="cyan"]  { --fg:#34e0ff; --fg-dim:#2080a0; --fg-faint:#104858; --glow:rgba(52,224,255,0.08); --glow-strong:rgba(52,224,255,0.18); }
 [data-theme="mono"]  { --fg:#d0d0d0; --fg-dim:#707070; --fg-faint:#404040; --glow:rgba(200,200,200,0.05); --glow-strong:rgba(200,200,200,0.1); }
-[data-theme="paper"] { --fg:#1a6b00; --fg-dim:#3d8c1e; --fg-faint:#7aad58; --bg:#f0f4ea; --bg-panel:#e4ecda; --bg-elevated:#dce8d0; --border:#b8cfa8; --danger:#cc2200; --glow:rgba(0,0,0,0); --glow-strong:rgba(0,0,0,0); }
+[data-theme="green-light"] { --fg:#1a6b00; --fg-dim:#3d8c1e; --fg-faint:#7aad58; --bg:#f0f4ea; --bg-panel:#e4ecda; --bg-elevated:#dce8d0; --border:#b8cfa8; --danger:#cc2200; --glow:rgba(0,0,0,0); --glow-strong:rgba(0,0,0,0); }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -124,7 +124,7 @@ html, body, #root {
 .theme-dot-amber { background: #ffb000; }
 .theme-dot-cyan  { background: #34e0ff; }
 .theme-dot-mono  { background: #d0d0d0; }
-.theme-dot-paper { background: #1a6b00; }
+.theme-dot-green-light { background: #1a6b00; }
 
 .theme-dropdown {
   position: absolute;
@@ -229,7 +229,7 @@ html, body, #root {
 .btn-preset:hover { color: var(--fg); border-color: var(--fg-dim); }
 .btn-group-wrap { display: flex; flex-wrap: wrap; gap: 3px; }
 
-.main-layout { display: flex; flex: 1; overflow: hidden; position: relative; }
+.main-layout { display: flex; flex: 1; overflow: hidden; }
 
 .ascii-area {
   position: absolute;
@@ -258,11 +258,7 @@ html, body, #root {
 }
 
 .controls-panel-wrap {
-  position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 220px;
-  z-index: 10;
-  pointer-events: auto;
+  display: contents;
 }
 
 .splash {
@@ -279,14 +275,13 @@ html, body, #root {
 .splash-hint { font-size: 11px; color: var(--fg-faint); letter-spacing: 0.04em; max-width: 320px; line-height: 1.5; }
 
 .controls-panel {
-  width: 100%;
-  height: 100%;
+  width: 230px;
+  flex-shrink: 0;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: -4px 0 16px rgba(0,0,0,0.4);
 }
 
 .section-nav {

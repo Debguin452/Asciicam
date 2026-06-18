@@ -1,12 +1,12 @@
 export type Tab = "camera" | "image" | "library" | "about";
-export type ThemeName = "green" | "amber" | "cyan" | "mono" | "paper";
+export type ThemeName = "green" | "amber" | "cyan" | "mono" | "green-light";
 
 export const THEMES: { id: ThemeName; label: string; light?: boolean }[] = [
-  { id: "green", label: "Green" },
-  { id: "amber", label: "Amber" },
-  { id: "cyan",  label: "Cyan"  },
-  { id: "mono",  label: "Mono"  },
-  { id: "paper", label: "Paper", light: true },
+  { id: "green",       label: "Green"       },
+  { id: "amber",       label: "Amber"       },
+  { id: "cyan",        label: "Cyan"        },
+  { id: "mono",        label: "Mono"        },
+  { id: "green-light", label: "Green Light", light: true },
 ];
 
 export const PRESETS = {
