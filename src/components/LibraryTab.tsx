@@ -10,6 +10,16 @@ interface Props {
   onEdit: (item: LibraryItem) => void;
 }
 
+const DEMO_ART = [
+  "    .--------.    ",
+  "   /  .    .  \\   ",
+  "  | (o)    (o) |  ",
+  "  |     --     |  ",
+  "  |   \\____/   |  ",
+  "   \\           /   ",
+  "    '----------'    ",
+].join("\n");
+
 export default function LibraryTab({ fontSize, refreshKey, onEdit }: Props) {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [selected, setSelected] = useState<LibraryItem | null>(null);
@@ -19,21 +29,19 @@ export default function LibraryTab({ fontSize, refreshKey, onEdit }: Props) {
   const [loaded, setLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const load = () => {
+  useEffect(() => {
+    let cancelled = false;
     setLoaded(false);
-    setTimeout(async () => {
-      try {
-        const result = await getLibraryItems();
-        setItems(result);
-      } catch {
-        setItems([]);
-      } finally {
-        setLoaded(true);
-      }
-    }, 0);
-  };
+    getLibraryItems()
+      .then(result => { if (!cancelled) setItems(result); })
+      .catch(() => { if (!cancelled) setItems([]); })
+      .finally(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
 
-  useEffect(() => { load(); }, [refreshKey]);
+  const load = async () => {
+    try { setItems(await getLibraryItems()); } catch { setItems([]); }
+  };
 
   const importImage = async (file: File): Promise<LibraryItem> => {
     const url = URL.createObjectURL(file);
@@ -205,6 +213,7 @@ export default function LibraryTab({ fontSize, refreshKey, onEdit }: Props) {
           </div>
         ) : items.length === 0 ? (
           <div className="splash">
+            <pre className="library-demo-art">{DEMO_ART}</pre>
             <button className="btn btn-primary btn-lg" onClick={() => fileInputRef.current?.click()}>
               Import File
             </button>

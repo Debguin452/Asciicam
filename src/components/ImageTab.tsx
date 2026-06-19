@@ -31,7 +31,7 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
   const dragRef = useRef<{ handle: DragHandle; startX: number; startY: number; startCrop: Crop } | null>(null);
 
   const [loaded, setLoaded] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 720);
   const [fileName, setFileName] = useState("");
   const [saved, setSaved] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -40,20 +40,27 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
   const [activeCrop, setActiveCrop] = useState<Crop | null>(null);
 
   useEffect(() => {
-    if (editItem) { setEditMode(true); setLoaded(false); setFileName(editItem.name); }
+    if (editItem) {
+      setEditMode(true); setLoaded(false); setFileName(editItem.name);
+      if (window.innerWidth > 720) setPanelOpen(true);
+    }
   }, [editItem]);
 
   const renderAscii = useCallback((useCrop?: Crop | null) => {
     const pre = preRef.current;
     if (!pre) return;
     if (editMode && editItem && !loaded) {
-      const charset = editItem.charset || " .:-=+*#%@";
+      const srcCharset = editItem.charset || " .:-=+*#%@";
+      const dstCharset = opts.charset || srcCharset;
+      const srcLen = srcCharset.length;
+      const dstLen = dstCharset.length;
       const frame = editItem.frames[0];
       if (!frame) return;
-      const colorFrame = editItem.colorFrames?.[0];
+      const colorFrame = opts.color ? editItem.colorFrames?.[0] : undefined;
       const html = frame.map((row, y) =>
         row.map((ci, x) => {
-          const ch = charset[ci] ?? " ";
+          const ni = srcLen > 1 ? Math.round((ci / (srcLen - 1)) * (dstLen - 1)) : 0;
+          const ch = dstCharset[Math.min(ni, dstLen - 1)] ?? " ";
           if (ch === " ") return "\u00a0";
           const c = colorFrame?.[y]?.[x];
           if (c) return `<span style="color:rgb(${c[0]},${c[1]},${c[2]})">${ch}</span>`;
@@ -315,7 +322,7 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
           )}
           <pre ref={preRef} className="ascii-output" style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }} />
         </div>
-        {panelOpen && isReady && !editMode && (
+        {panelOpen && isReady && (
           <div className="controls-panel-wrap">
             <ControlsPanel opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={onReset} />
           </div>
