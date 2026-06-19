@@ -232,13 +232,14 @@ html, body, #root {
 .main-layout { display: flex; flex: 1; overflow: hidden; }
 
 .ascii-area {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
   background: var(--bg);
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  transition: right 0.15s ease;
 }
 .ascii-area::-webkit-scrollbar { width: 4px; height: 4px; }
 .ascii-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -277,6 +278,7 @@ html, body, #root {
 .controls-panel {
   width: 230px;
   flex-shrink: 0;
+  align-self: stretch;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
   display: flex;
@@ -462,9 +464,9 @@ html, body, #root {
   .tab-btn { padding: 0 7px; font-size: 9px; }
   .toolbar { height: auto; min-height: 32px; padding: 3px 6px; }
   .main-layout { flex-direction: column; }
-  .ascii-area { flex: 1; padding: 3px; align-items: flex-start; justify-content: flex-start; }
+  .ascii-area { flex: 1; padding: 3px; }
   .ascii-output { font-size: 5px !important; line-height: 1.1; }
-  .controls-panel { width: 100%; border-left: none; border-top: 1px solid var(--border); height: 200px; flex-shrink: 0; }
+  .controls-panel { width: 100%; border-left: none; border-top: 1px solid var(--border); height: 220px; flex-shrink: 0; overflow-y: auto; }
   .panel-body { overflow-x: hidden; }
   .btn { min-height: 30px; padding: 5px 9px; }
   .btn-sm { min-height: 26px; }
