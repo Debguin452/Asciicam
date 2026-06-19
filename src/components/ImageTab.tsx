@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEv
 import { processFrame, frameToHtml, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
 import { saveLibraryItem, makeThumbnail, genId, type LibraryItem } from "../lib/library";
 import { exportPng, exportJpeg, framesToText } from "../lib/export";
-import { makeFilename, triggerDownload, getThemeColors } from "../types";
+import { makeFilename, triggerDownload, getExportBg } from "../types";
 import ControlsPanel from "./ControlsPanel";
 
 interface Props {
@@ -14,18 +14,21 @@ interface Props {
   onLibraryUpdated: () => void;
   editItem?: LibraryItem | null;
   onEditDone?: () => void;
+  exportFg: string;
+  onExportFgChange: (v: string) => void;
 }
 
 interface Crop { x: number; y: number; w: number; h: number; }
 
 type DragHandle = "tl"|"tr"|"bl"|"br"|"t"|"b"|"l"|"r"|"move";
 
-export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated, editItem, onEditDone }: Props) {
+export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated, editItem, onEditDone, exportFg, onExportFgChange }: Props) {
   const imgRef = useRef(new Image());
   const offscreen = useRef(document.createElement("canvas"));
   const preRef = useRef<HTMLPreElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cropPreviewRef = useRef<HTMLCanvasElement>(null);
+  const colorInputRef = useRef<HTMLInputElement>(null);
   const lastFrameRef = useRef<AsciiFrame | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragRef = useRef<{ handle: DragHandle; startX: number; startY: number; startCrop: Crop } | null>(null);
@@ -199,16 +202,39 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
 
   const onCropMouseUp = useCallback(() => { dragRef.current = null; }, []);
 
+  const onCropTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    const t = e.touches[0]; if (!t) return;
+    const canvas = cropPreviewRef.current; if (!canvas || !crop) return;
+    const rect = canvas.getBoundingClientRect();
+    const iw = imgRef.current.naturalWidth, ih = imgRef.current.naturalHeight;
+    const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+    const mx = (t.clientX - rect.left) * scaleX * (iw / canvas.width);
+    const my = (t.clientY - rect.top) * scaleY * (ih / canvas.height);
+    const handle = getHandle({ clientX: t.clientX, clientY: t.clientY } as React.MouseEvent<HTMLCanvasElement>, canvas);
+    dragRef.current = { handle, startX: mx, startY: my, startCrop: { ...crop } };
+    e.preventDefault();
+  }, [crop, getHandle]);
+
   useEffect(() => {
+    const onTouchMove = (e: TouchEvent) => {
+      const t = e.touches[0]; if (!t) return;
+      e.preventDefault();
+      onCropMouseMove({ clientX: t.clientX, clientY: t.clientY } as MouseEvent);
+    };
+    const onTouchEnd = () => { dragRef.current = null; };
     if (showCrop) {
       window.addEventListener("mousemove", onCropMouseMove);
       window.addEventListener("mouseup", onCropMouseUp);
+      window.addEventListener("touchmove", onTouchMove, { passive: false });
+      window.addEventListener("touchend", onTouchEnd);
     }
     return () => {
       window.removeEventListener("mousemove", onCropMouseMove);
       window.removeEventListener("mouseup", onCropMouseUp);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
     };
-  }, [showCrop, onCropMouseMove, onCropMouseUp]);
+  }, [showCrop, onCropMouseMove, onCropMouseUp, onCropTouchStart]);
 
   const handleFile = (file: File) => {
     setEditMode(false); onEditDone?.();
@@ -244,14 +270,12 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
 
   const savePng = async () => {
     const frame = lastFrameRef.current; if (!frame) return;
-    const { fg, bg } = getThemeColors();
-    triggerDownload(await exportPng(frame, fontSize, fg, bg, opts.color), makeFilename("ascii", "png"));
+    triggerDownload(await exportPng(frame, fontSize, exportFg, getExportBg(exportFg), opts.color), makeFilename("ascii", "png"));
   };
 
   const saveJpeg = async () => {
     const frame = lastFrameRef.current; if (!frame) return;
-    const { fg, bg } = getThemeColors();
-    triggerDownload(await exportJpeg(frame, fontSize, fg, bg, opts.color), makeFilename("ascii", "jpg"));
+    triggerDownload(await exportJpeg(frame, fontSize, exportFg, getExportBg(exportFg), opts.color), makeFilename("ascii", "jpg"));
   };
 
   const saveToLibrary = async () => {
@@ -308,6 +332,11 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
           {isReady && (
             <button className="btn btn-ghost" onClick={() => setPanelOpen(o => !o)}>Controls {panelOpen ? "▲" : "▼"}</button>
           )}
+          <input ref={colorInputRef} type="color" value={exportFg} onChange={e => onExportFgChange(e.target.value)}
+            style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }} tabIndex={-1} />
+          <button className="btn btn-ghost color-pick-btn" onClick={() => colorInputRef.current?.click()} title="Export font color">
+            <span className="color-swatch" style={{ background: exportFg }} />
+          </button>
         </div>
       </div>
 
@@ -338,7 +367,8 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
                 ref={cropPreviewRef}
                 className="crop-canvas"
                 onMouseDown={onCropMouseDown}
-                style={{ cursor: dragRef.current ? "grabbing" : "crosshair" }}
+                onTouchStart={onCropTouchStart}
+                style={{ cursor: dragRef.current ? "grabbing" : "crosshair", touchAction: "none" }}
               />
             </div>
             {crop && (
