@@ -35,7 +35,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const [error, setError] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
   const [recCount, setRecCount] = useState(0);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 720);
   const [exportStatus, setExportStatus] = useState("");
   const [isMobile] = useState(() => window.innerWidth <= 720);
 
@@ -103,6 +103,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const startCamera = async () => {
     setError(null);
     resetTemporalSmoothing();
+    if (window.innerWidth > 720) setPanelOpen(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
       streamRef.current = stream;
