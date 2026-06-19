@@ -60,3 +60,10 @@ export function getThemeColors(): { fg: string; bg: string } {
     bg: style.getPropertyValue("--bg").trim() || "#060606",
   };
 }
+
+export function getExportBg(fg: string): string {
+  const r = parseInt(fg.slice(1, 3), 16) || 0;
+  const g = parseInt(fg.slice(3, 5), 16) || 0;
+  const b = parseInt(fg.slice(5, 7), 16) || 0;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 128 ? "#060606" : "#f0f0f0";
+}

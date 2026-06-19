@@ -14,6 +14,7 @@ export default function App() {
   const [themeOpen, setThemeOpen] = useState(false);
   const [opts, setOpts] = useState<AsciiOptions>({ ...DEFAULT_OPTIONS });
   const [fontSize, setFontSize] = useState(10);
+  const [exportFg, setExportFg] = useState("#39ff14");
   const [libraryKey, setLibraryKey] = useState(0);
   const [editItem, setEditItem] = useState<LibraryItem | null>(null);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -85,8 +86,8 @@ export default function App() {
         </div>
       </header>
       <main className="app-main">
-        {tab === "camera"  && <CameraTab  opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={resetOpts} onLibraryUpdated={() => setLibraryKey(k => k+1)} />}
-        {tab === "image"   && <ImageTab   opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={resetOpts} onLibraryUpdated={() => setLibraryKey(k => k+1)} editItem={editItem} onEditDone={() => setEditItem(null)} />}
+        {tab === "camera"  && <CameraTab  opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={resetOpts} onLibraryUpdated={() => setLibraryKey(k => k+1)} exportFg={exportFg} onExportFgChange={setExportFg} />}
+        {tab === "image"   && <ImageTab   opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={resetOpts} onLibraryUpdated={() => setLibraryKey(k => k+1)} editItem={editItem} onEditDone={() => setEditItem(null)} exportFg={exportFg} onExportFgChange={setExportFg} />}
         {tab === "library" && <LibraryTab fontSize={fontSize} refreshKey={libraryKey} onEdit={handleEditFromLibrary} />}
         {tab === "about"   && <AboutTab />}
       </main>
