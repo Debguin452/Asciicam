@@ -133,11 +133,8 @@ function decode(buf: ArrayBuffer, prevFrame: RemoteFrame | null): RemoteFrame | 
     const streamStart = 8 + csLen;
     const streamEnd = hasColor ? buf.byteLength - N * 3 : buf.byteLength;
     const streamBytes = new Uint8Array(buf, streamStart, streamEnd - streamStart);
-    const stream = new Uint16Array(
-  streamBytes.buffer,
-  streamBytes.byteOffset,
-  streamBytes.byteLength >> 1
-);
+    const stream = new Uint16Array(streamBytes.buffer.slice(streamBytes.byteOffset, streamBytes.byteOffset + streamBytes.byteLength));
+
     const charIndices = new Uint16Array(N);
 
     if (isDelta) {
@@ -170,14 +167,15 @@ function decode(buf: ArrayBuffer, prevFrame: RemoteFrame | null): RemoteFrame | 
 }
 
 export class CallManager {
-  peer: Peer | null = null;
+  private peer: Peer | null = null;
   private dataConn: DataConnection | null = null;
   private mediaConn: MediaConnection | null = null;
   private events: CallManagerEvents;
+  private localStream: MediaStream | null = null;
 
   private prevSentIndices: Uint16Array | null = null;
   private prevRecvFrame: RemoteFrame | null = null;
-  private keyframeInterval = 5; // send a full keyframe every N frames
+  private keyframeInterval = 30; // send a full keyframe every N frames
   private frameCount = 0;
 
   private lastSentAt = 0;
@@ -185,6 +183,10 @@ export class CallManager {
 
   constructor(events: CallManagerEvents) {
     this.events = events;
+  }
+
+  setLocalStream(stream: MediaStream) {
+    this.localStream = stream;
   }
 
   async start(): Promise<string> {
@@ -203,8 +205,11 @@ export class CallManager {
 
       peer.on("call", call => {
         this.mediaConn = call;
-        // Answer with local stream (will be set later via answerWithStream)
         this.pendingCall = call;
+        // If camera is already running, answer immediately — don't wait for startCamera()
+        if (this.localStream) {
+          this.answerWithStream(this.localStream);
+        }
         this.events.onStatus("connected");
       });
 
@@ -235,13 +240,12 @@ export class CallManager {
     this.events.onStatus("connecting", remoteId);
 
     // Data channel for ASCII frames
-   const conn = this.peer.connect(remoteId.trim(), {
-  reliable: false,
-  serialization: "binary",
-  metadata: {
-    type: "ascii"
-  }
-});
+    const conn = this.peer.connect(remoteId.trim(), {
+      reliable: false,
+      serialization: "binary",
+    });
+    this.attachData(conn);
+
     // Media channel for audio
     if (localStream) {
       const call = this.peer.call(remoteId.trim(), localStream);
@@ -252,43 +256,22 @@ export class CallManager {
   }
 
   private attachData(conn: DataConnection) {
-  this.dataConn = conn;
-
-  conn.on("open", () => {
-    this.events.onStatus("connected");
-  });
-
-  conn.on("data", async (data: unknown) => {
-    try {
-      let buffer: ArrayBuffer | null = null;
-
+    this.dataConn = conn;
+    conn.on("open", () => {
+      if (this.events) this.events.onStatus("connected");
+    });
+    conn.on("data", (data: unknown) => {
       if (data instanceof ArrayBuffer) {
-        buffer = data;
-      } else if (data instanceof Blob) {
-        buffer = await data.arrayBuffer();
+        const frame = decode(data, this.prevRecvFrame);
+        if (frame) {
+          this.prevRecvFrame = frame;
+          this.events.onRemoteFrame(frame);
+        }
       }
-
-      if (!buffer) return;
-
-      const frame = decode(buffer, this.prevRecvFrame);
-
-      if (frame) {
-        this.prevRecvFrame = frame;
-        this.events.onRemoteFrame(frame);
-      }
-    } catch {}
-  });
-
-  conn.on("close", () => {
-    this.prevRecvFrame = null;
-    this.prevSentIndices = null;
-    this.events.onStatus("closed");
-  });
-
-  conn.on("error", err => {
-    this.events.onStatus("error", err.message);
-  });
-}
+    });
+    conn.on("close",  () => this.events.onStatus("closed"));
+    conn.on("error", err => this.events.onStatus("error", err.message));
+  }
 
   sendFrame(
     charIndices: Uint16Array,
