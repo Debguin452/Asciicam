@@ -1,4 +1,4 @@
-export type Tab = "camera" | "image" | "library" | "about";
+export type Tab = "camera" | "image" | "library" | "call" | "about";
 export type ThemeName = "green" | "amber" | "cyan" | "mono" | "green-light";
 
 export const THEMES: { id: ThemeName; label: string; light?: boolean }[] = [

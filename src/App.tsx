@@ -4,6 +4,7 @@ import { THEMES, type Tab, type ThemeName } from "./types";
 import CameraTab from "./components/CameraTab";
 import ImageTab from "./components/ImageTab";
 import LibraryTab from "./components/LibraryTab";
+import CallTab from "./components/CallTab";
 import AboutTab from "./components/AboutTab";
 import type { LibraryItem } from "./lib/library";
 
@@ -51,6 +52,7 @@ export default function App() {
     { id: "camera",  label: "Camera"  },
     { id: "image",   label: "Image"   },
     { id: "library", label: "Library" },
+    { id: "call",    label: "Call"    },
     { id: "about",   label: "About"   },
   ];
 
@@ -89,6 +91,7 @@ export default function App() {
         {tab === "camera"  && <CameraTab  opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={resetOpts} onLibraryUpdated={() => setLibraryKey(k => k+1)} exportFg={exportFg} onExportFgChange={setExportFg} />}
         {tab === "image"   && <ImageTab   opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={resetOpts} onLibraryUpdated={() => setLibraryKey(k => k+1)} editItem={editItem} onEditDone={() => setEditItem(null)} exportFg={exportFg} onExportFgChange={setExportFg} />}
         {tab === "library" && <LibraryTab fontSize={fontSize} refreshKey={libraryKey} onEdit={handleEditFromLibrary} />}
+        {tab === "call"    && <CallTab opts={opts} updateOpt={updateOpt} fontSize={fontSize} setFontSize={setFontSize} onReset={resetOpts} />}
         {tab === "about"   && <AboutTab />}
       </main>
     </div>
