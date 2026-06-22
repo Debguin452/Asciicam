@@ -156,7 +156,8 @@ function decode(buf: ArrayBuffer, prevFrame: RemoteFrame | null): RemoteFrame | 
         const pos = stream[i], idx = stream[i + 1];
         if (pos < N) charIndices[pos] = idx;
       }
-    } else {
+    } 
+  }else {
       // RLE decode
       let pos = 0;
       for (let i = 0; i < stream.length - 1; i += 2) {
