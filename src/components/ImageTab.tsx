@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { processFrame, frameToHtml, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
 import { saveLibraryItem, makeThumbnail, genId, type LibraryItem } from "../lib/library";
-import { exportPng, exportJpeg, framesToText } from "../lib/export";
+import { exportPng, exportJpeg, exportSvg, exportHtml, framesToText } from "../lib/export";
 import { makeFilename, triggerDownload, getExportBg } from "../types";
 import ControlsPanel from "./ControlsPanel";
 
@@ -26,12 +26,16 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
   const imgRef = useRef(new Image());
   const offscreen = useRef(document.createElement("canvas"));
   const preRef = useRef<HTMLPreElement>(null);
+  const areaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cropPreviewRef = useRef<HTMLCanvasElement>(null);
   const colorInputRef = useRef<HTMLInputElement>(null);
   const lastFrameRef = useRef<AsciiFrame | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragRef = useRef<{ handle: DragHandle; startX: number; startY: number; startCrop: Crop } | null>(null);
+
+  const CHAR_W_RATIO = 0.575;
+  const CHAR_H_RATIO = 1.15;
 
   const [loaded, setLoaded] = useState(false);
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 720);
@@ -70,6 +74,14 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
           return ch;
         }).join("")
       ).join("\n");
+      const dH = frame.length, dW = frame[0]?.length ?? 0;
+      const area = areaRef.current;
+      if (area && dW && dH) {
+        const dfx = area.clientWidth  / (dW * CHAR_W_RATIO);
+        const dfy = area.clientHeight / (dH * CHAR_H_RATIO);
+        pre.style.fontSize = `${Math.min(dfx, dfy).toFixed(2)}px`;
+        pre.style.lineHeight = "1.15";
+      }
       pre.innerHTML = html;
       return;
     }
@@ -77,10 +89,31 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
     if (!img.complete || !img.naturalWidth) return;
     const cropArg = useCrop !== undefined ? useCrop : activeCrop;
     const frame = processFrame(img, offscreen.current, opts, false, cropArg ?? undefined);
-    if (frame) { lastFrameRef.current = frame; pre.innerHTML = frameToHtml(frame, opts.color); }
+    if (frame) {
+      lastFrameRef.current = frame;
+      // Compute font size to fill the ascii-area while preserving aspect ratio
+      const dH = frame.length;
+      const dW = frame[0]?.length ?? 0;
+      const area = areaRef.current;
+      if (area && dW && dH) {
+        const dfx = area.clientWidth  / (dW * CHAR_W_RATIO);
+        const dfy = area.clientHeight / (dH * CHAR_H_RATIO);
+        pre.style.fontSize = `${Math.min(dfx, dfy).toFixed(2)}px`;
+        pre.style.lineHeight = "1.15";
+      }
+      pre.innerHTML = frameToHtml(frame, opts.color);
+    }
   }, [opts, editMode, editItem, loaded, activeCrop]);
 
   useEffect(() => { renderAscii(); }, [renderAscii]);
+
+  useEffect(() => {
+    const area = areaRef.current;
+    if (!area) return;
+    const obs = new ResizeObserver(() => renderAscii());
+    obs.observe(area);
+    return () => obs.disconnect();
+  }, [renderAscii]);
 
   const drawCropOverlay = useCallback(() => {
     const canvas = cropPreviewRef.current;
@@ -341,7 +374,7 @@ export default function ImageTab({ opts, updateOpt, fontSize, setFontSize, onRes
       </div>
 
       <div className="main-layout">
-        <div className="ascii-area" onDrop={onDrop} onDragOver={e => e.preventDefault()}>
+        <div ref={areaRef} className="ascii-area" onDrop={onDrop} onDragOver={e => e.preventDefault()}>
           {!isReady && (
             <div className="splash">
               <button className="btn btn-primary btn-lg" onClick={() => fileInputRef.current?.click()}>Upload Image</button>
