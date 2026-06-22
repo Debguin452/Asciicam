@@ -1,48 +1,31 @@
-import { frameToCells, frameToText as asciiFrameToText, type AsciiFrame } from "./ascii";
-
-// Legacy AsciiCell[][] format (used internally by export canvas drawing)
-type LegacyFrame = { char: string; charIdx: number; r: number; g: number; b: number }[][];
-
-function toLegacy(frame: AsciiFrame): LegacyFrame {
-  return frameToCells(frame);
-}
+import type { AsciiFrame } from "./ascii";
 
 export function frameToText(frame: AsciiFrame): string {
-  return asciiFrameToText(frame);
+  return frame.map(row => row.map(c => c.char).join("")).join("\n");
 }
 
 export function framesToText(frames: AsciiFrame[]): string {
-  return frames.map((f, i) => (i > 0 ? "\n---\n" : "") + asciiFrameToText(f)).join("");
+  return frames.map((f, i) => (i > 0 ? "\n---\n" : "") + frameToText(f)).join("");
 }
 
-function frameToCanvas(frame: AsciiFrame, fontSize: number, fg: string, bg: string, color: boolean): HTMLCanvasElement {
-  const { width, height, chars, r, g, b, charset, isBraille, braille } = frame;
+export function frameToCanvas(frame: AsciiFrame, fontSize: number, fg: string, bg: string, color: boolean): HTMLCanvasElement {
+  const cols = frame[0]?.length ?? 80;
+  const rows = frame.length;
   const cw = Math.ceil(fontSize * 0.6);
   const ch = Math.ceil(fontSize * 1.15);
   const canvas = document.createElement("canvas");
-  canvas.width = width * cw;
-  canvas.height = height * ch;
+  canvas.width = cols * cw;
+  canvas.height = rows * ch;
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      let ch2: string;
-      if (isBraille && braille) {
-        ch2 = String.fromCodePoint(0x2800 | braille[i]);
-      } else {
-        ch2 = charset[chars[i]] ?? " ";
-      }
-      if (ch2 === " ") continue;
-      if (color && frame.isColor) {
-        ctx.fillStyle = `rgb(${r[i]},${g[i]},${b[i]})`;
-      } else {
-        ctx.fillStyle = fg;
-      }
-      ctx.fillText(ch2, x * cw, (y + 1) * ch - Math.ceil(ch * 0.2));
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < (frame[y]?.length ?? 0); x++) {
+      const cell = frame[y][x];
+      if (cell.char === " ") continue;
+      ctx.fillStyle = color && (cell.r || cell.g || cell.b) ? `rgb(${cell.r},${cell.g},${cell.b})` : fg;
+      ctx.fillText(cell.char, x * cw, (y + 1) * ch - Math.ceil(ch * 0.2));
     }
   }
   return canvas;
@@ -63,14 +46,15 @@ export function exportJpeg(frame: AsciiFrame, fontSize: number, fg: string, bg: 
 }
 
 export async function exportGif(frames: AsciiFrame[], fontSize: number, fg: string, bg: string, color: boolean, fps: number): Promise<Blob> {
-  if (!frames.length) throw new Error("No frames");
-  const { width, height } = frames[0];
+  const cols = frames[0]?.[0]?.length ?? 80;
+  const rows = frames[0]?.length ?? 40;
   const cw = Math.ceil(fontSize * 0.6);
   const ch = Math.ceil(fontSize * 1.15);
-  const W = width * cw;
-  const H = height * ch;
+  const W = cols * cw;
+  const H = rows * ch;
   const canvas = document.createElement("canvas");
-  canvas.width = W; canvas.height = H;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext("2d")!;
   ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
 
@@ -81,49 +65,48 @@ export async function exportGif(frames: AsciiFrame[], fontSize: number, fg: stri
   for (const frame of frames) {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
-    for (let y = 0; y < frame.height; y++) {
-      for (let x = 0; x < frame.width; x++) {
-        const i = y * frame.width + x;
-        const ch2 = frame.charset[frame.chars[i]] ?? " ";
-        if (ch2 === " ") continue;
-        ctx.fillStyle = color && frame.isColor ? `rgb(${frame.r[i]},${frame.g[i]},${frame.b[i]})` : fg;
-        ctx.fillText(ch2, x * cw, (y + 1) * ch - Math.ceil(ch * 0.2));
+    for (let y = 0; y < frame.length; y++) {
+      for (let x = 0; x < (frame[y]?.length ?? 0); x++) {
+        const cell = frame[y][x];
+        if (cell.char === " ") continue;
+        ctx.fillStyle = color && (cell.r || cell.g || cell.b) ? `rgb(${cell.r},${cell.g},${cell.b})` : fg;
+        ctx.fillText(cell.char, x * cw, (y + 1) * ch - Math.ceil(ch * 0.2));
       }
     }
     const imgData = ctx.getImageData(0, 0, W, H);
-    const palette = quantize(new Uint8Array(imgData.data.buffer), 256);
-    const index = applyPalette(new Uint8Array(imgData.data.buffer), palette);
+    const palette = quantize(imgData.data, 256);
+    const index = applyPalette(imgData.data, palette);
     gif.writeFrame(index, W, H, { palette, delay });
   }
 
   gif.finish();
-  return new Blob([gif.bytes().buffer as ArrayBuffer], { type: "image/gif" });
+  return new Blob([gif.bytesView()], { type: "image/gif" });
 }
 
 export async function exportMp4(frames: AsciiFrame[], fontSize: number, fg: string, bg: string, color: boolean, fps: number): Promise<Blob> {
-  if (!frames.length) throw new Error("No frames");
-  const { width, height } = frames[0];
+  const cols = frames[0]?.[0]?.length ?? 80;
+  const rows = frames[0]?.length ?? 40;
   const cw = Math.ceil(fontSize * 0.6);
   const ch = Math.ceil(fontSize * 1.15);
-  const rawW = width * cw;
-  const rawH = height * ch;
+  const rawW = cols * cw;
+  const rawH = rows * ch;
   const W = rawW % 2 === 0 ? rawW : rawW + 1;
   const H = rawH % 2 === 0 ? rawH : rawH + 1;
   const canvas = document.createElement("canvas");
-  canvas.width = W; canvas.height = H;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext("2d")!;
   ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
 
   const drawFrame = (frame: AsciiFrame) => {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
-    for (let y = 0; y < frame.height; y++) {
-      for (let x = 0; x < frame.width; x++) {
-        const i = y * frame.width + x;
-        const ch2 = frame.charset[frame.chars[i]] ?? " ";
-        if (ch2 === " ") continue;
-        ctx.fillStyle = color && frame.isColor ? `rgb(${frame.r[i]},${frame.g[i]},${frame.b[i]})` : fg;
-        ctx.fillText(ch2, x * cw, (y + 1) * ch - Math.ceil(ch * 0.2));
+    for (let y = 0; y < frame.length; y++) {
+      for (let x = 0; x < (frame[y]?.length ?? 0); x++) {
+        const cell = frame[y][x];
+        if (cell.char === " ") continue;
+        ctx.fillStyle = color && (cell.r || cell.g || cell.b) ? `rgb(${cell.r},${cell.g},${cell.b})` : fg;
+        ctx.fillText(cell.char, x * cw, (y + 1) * ch - Math.ceil(ch * 0.2));
       }
     }
   };
@@ -133,7 +116,7 @@ export async function exportMp4(frames: AsciiFrame[], fontSize: number, fg: stri
     const target = new ArrayBufferTarget();
     const muxer = new Muxer({ target, video: { codec: "avc", width: W, height: H }, fastStart: "in-memory" });
     const encoder = new VideoEncoder({
-      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta!),
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
       error: console.error,
     });
     encoder.configure({ codec: "avc1.42001f", width: W, height: H, bitrate: 2_000_000, framerate: fps });
@@ -150,8 +133,7 @@ export async function exportMp4(frames: AsciiFrame[], fontSize: number, fg: stri
   }
 
   return new Promise((resolve, reject) => {
-    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-      ? "video/webm;codecs=vp9" : "video/webm";
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
     const stream = canvas.captureStream(fps);
     const recorder = new MediaRecorder(stream, { mimeType });
     const chunks: BlobPart[] = [];
@@ -159,11 +141,11 @@ export async function exportMp4(frames: AsciiFrame[], fontSize: number, fg: stri
     recorder.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }));
     recorder.onerror = reject;
     recorder.start();
-    let fi = 0;
+    let i = 0;
     const interval = 1000 / Math.max(1, fps);
     const tick = () => {
-      if (fi >= frames.length) { recorder.stop(); return; }
-      drawFrame(frames[fi++]);
+      if (i >= frames.length) { recorder.stop(); return; }
+      drawFrame(frames[i++]);
       setTimeout(tick, interval);
     };
     tick();

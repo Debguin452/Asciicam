@@ -1,4 +1,4 @@
-import { type AsciiFrame } from "./ascii";
+import type { AsciiFrame } from "./ascii";
 
 const MAGIC = "ACB1";
 const MAGIC2 = "ACB2";
@@ -43,15 +43,11 @@ export function encodeFramesToBinary(
   out[p++] = includeColor ? 1 : 0;
 
   for (const frame of frames) {
-    // New flat AsciiFrame — typed array access
-    const { chars, r, g, b, width, height } = frame;
-    const w = Math.min(asciiW, width);
-    const h = Math.min(asciiH, height);
-
-    let bitBuf = 0, bitCount = 0;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const idx = chars[y * width + x] ?? 0;
+    let bitBuf = 0;
+    let bitCount = 0;
+    for (let y = 0; y < asciiH; y++) {
+      for (let x = 0; x < asciiW; x++) {
+        const idx = frame[y][x].charIdx;
         bitBuf = (bitBuf << bitsPerChar) | idx;
         bitCount += bitsPerChar;
         while (bitCount >= 8) {
@@ -60,15 +56,17 @@ export function encodeFramesToBinary(
         }
       }
     }
-    if (bitCount > 0) out[p++] = (bitBuf << (8 - bitCount)) & 0xff;
+    if (bitCount > 0) {
+      out[p++] = (bitBuf << (8 - bitCount)) & 0xff;
+    }
 
     if (includeColor) {
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const i = y * width + x;
-          out[p++] = r[i] ?? 0;
-          out[p++] = g[i] ?? 0;
-          out[p++] = b[i] ?? 0;
+      for (let y = 0; y < asciiH; y++) {
+        for (let x = 0; x < asciiW; x++) {
+          const cell = frame[y][x];
+          out[p++] = cell.r;
+          out[p++] = cell.g;
+          out[p++] = cell.b;
         }
       }
     }
@@ -88,16 +86,21 @@ export interface DecodedBinary {
   colorFrames?: Uint8Array[];
 }
 
-export function decodeFramesFromBinary(data: Uint8Array, hasColor = false): DecodedBinary {
+export function decodeBinaryFrames(data: Uint8Array): DecodedBinary {
   let p = 0;
-  const magic = String.fromCharCode(data[p], data[p+1], data[p+2], data[p+3]); p += 4;
-  if (magic !== MAGIC && magic !== MAGIC2) throw new Error("Invalid binary file: bad magic");
+  const magic = String.fromCharCode(data[0], data[1], data[2], data[3]);
+  if (magic !== MAGIC && magic !== MAGIC2) throw new Error("Invalid file: bad magic header");
+  const hasColor = magic === MAGIC2;
+  p += 4;
 
   const charsetLen = data[p++];
-  const charset = new TextDecoder().decode(data.slice(p, p + charsetLen)); p += charsetLen;
+  const charset = new TextDecoder().decode(data.slice(p, p + charsetLen));
+  p += charsetLen;
+
   const asciiW = (data[p++] << 8) | data[p++];
   const asciiH = (data[p++] << 8) | data[p++];
-  const frameCount = (data[p++] << 24) | (data[p++] << 16) | (data[p++] << 8) | data[p++];
+  const frameCount =
+    (data[p++] << 24) | (data[p++] << 16) | (data[p++] << 8) | data[p++];
   const bitsPerChar = data[p++];
   const colorFlag = data[p++];
   const fileHasColor = hasColor && colorFlag === 1;
@@ -111,7 +114,8 @@ export function decodeFramesFromBinary(data: Uint8Array, hasColor = false): Deco
 
   for (let f = 0; f < frameCount; f++) {
     const frame: number[][] = [];
-    let bitBuf = 0, bitCount = 0;
+    let bitBuf = 0;
+    let bitCount = 0;
     let bytePos = p;
     for (let y = 0; y < asciiH; y++) {
       const row: number[] = [];
@@ -146,13 +150,15 @@ export function decodeFramesFromBinary(data: Uint8Array, hasColor = false): Deco
 export async function gzipCompress(data: Uint8Array): Promise<Uint8Array> {
   const cs = new CompressionStream("gzip");
   const stream = new Blob([data as BlobPart]).stream().pipeThrough(cs);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
 }
 
 export async function gzipDecompress(data: Uint8Array): Promise<Uint8Array> {
   const ds = new DecompressionStream("gzip");
   const stream = new Blob([data as BlobPart]).stream().pipeThrough(ds);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
 }
 
 export function encodeFramesToText(
@@ -163,13 +169,8 @@ export function encodeFramesToText(
 ): string {
   const lines: string[] = [`ACASCII1 ${asciiW} ${asciiH} ${charset}`];
   for (const frame of frames) {
-    const { chars, width, height } = frame;
-    for (let y = 0; y < height; y++) {
-      let row = "";
-      for (let x = 0; x < width; x++) {
-        row += charset[chars[y * width + x]] ?? " ";
-      }
-      lines.push(row);
+    for (const row of frame) {
+      lines.push(row.map(c => c.char).join(""));
     }
     lines.push("---FRAME---");
   }

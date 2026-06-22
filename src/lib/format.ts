@@ -90,15 +90,10 @@ function packFrames(
   let p = 0;
 
   for (const frame of frames) {
-    // New flat AsciiFrame — use typed array directly
-    const { chars, r, g, b, width, height } = frame;
-    const w = Math.min(asciiW, width);
-    const h = Math.min(asciiH, height);
-
     let bitBuf = 0, bitCount = 0;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const idx = chars[y * width + x] ?? 0;
+    for (let y = 0; y < asciiH; y++) {
+      for (let x = 0; x < asciiW; x++) {
+        const idx = frame[y]?.[x]?.charIdx ?? 0;
         bitBuf = (bitBuf << bpc) | idx;
         bitCount += bpc;
         while (bitCount >= 8) { bitCount -= 8; out[p++] = (bitBuf >> bitCount) & 0xff; }
@@ -107,12 +102,12 @@ function packFrames(
     if (bitCount > 0) out[p++] = (bitBuf << (8 - bitCount)) & 0xff;
 
     if (hasColor) {
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const i = y * width + x;
-          out[p++] = r[i] ?? 0;
-          out[p++] = g[i] ?? 0;
-          out[p++] = b[i] ?? 0;
+      for (let y = 0; y < asciiH; y++) {
+        for (let x = 0; x < asciiW; x++) {
+          const cell = frame[y]?.[x];
+          out[p++] = cell?.r ?? 0;
+          out[p++] = cell?.g ?? 0;
+          out[p++] = cell?.b ?? 0;
         }
       }
     }
@@ -283,14 +278,7 @@ export function encodeFramesToText(
 ): string {
   const lines: string[] = [`ACASCII1 ${asciiW} ${asciiH} ${charset}`];
   for (const frame of frames) {
-    const { chars, width, height } = frame;
-    for (let y = 0; y < height; y++) {
-      let row = "";
-      for (let x = 0; x < width; x++) {
-        row += charset[chars[y * width + x]] ?? " ";
-      }
-      lines.push(row);
-    }
+    for (const row of frame) lines.push(row.map(c => c.char).join(""));
     lines.push("---FRAME---");
   }
   return lines.join("\n");
