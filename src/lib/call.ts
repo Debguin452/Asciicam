@@ -120,13 +120,7 @@ function encode(
 
 function decode(buf: ArrayBuffer, prevFrame: RemoteFrame | null): RemoteFrame | null {
   try {
-    console.log(
-  "RECV",
-  w,
-  h,
-  charIndices.length,
-  isDelta ? "DELTA" : "KEY"
-);
+    
     const view = new DataView(buf);
     const flags = view.getUint8(1);
     const w = view.getUint16(2, false);
@@ -318,6 +312,11 @@ export class CallManager {
     const minInterval = 1000 / this.targetFps;
     if (now - this.lastSentAt < minInterval) return;
     this.lastSentAt = now;
+    
+
+    this.frameCount++;
+    const isKey = this.frameCount % this.keyframeInterval === 1;
+    const prev = isKey ? null : this.prevSentIndices;
     console.log(
   "SEND",
   w,
@@ -325,11 +324,6 @@ export class CallManager {
   charIndices.length,
   isKey ? "KEY" : "DELTA"
 );
-
-    this.frameCount++;
-    const isKey = this.frameCount % this.keyframeInterval === 1;
-    const prev = isKey ? null : this.prevSentIndices;
-
     const buf = encode(charIndices, w, h, charset, colors, prev);
 
     try {
