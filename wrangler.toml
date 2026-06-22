@@ -1,10 +1,10 @@
-name = "asciiweb-atv"
+name = "asciiweb"
 compatibility_date = "2024-01-01"
 pages_build_output_dir = "dist"
 
 [[kv_namespaces]]
 binding = "ATV_KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "32d79302371b41ab8da1cc28acf6300a"
 
 # Optional: Add R2 bucket for larger videos (>2MB)
 # [[r2_buckets]]
