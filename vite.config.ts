@@ -15,10 +15,14 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 5173,
-    host: true,
+   port: 5173,
+   host: true,
+   allowedHosts: true,
+   hmr: {
+      clientPort: 443,
+    },
   },
-  preview: {
+ preview: {
     port: 4173,
     host: true,
   },
