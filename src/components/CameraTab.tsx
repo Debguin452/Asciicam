@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { renderToHtml, snapshotFromBuffers, processFrame, resetTemporalSmoothing, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
+import {
+  processFrame, frameToText, domRenderer, clampDimensions, resetTemporalSmoothing,
+  type AsciiOptions, type AsciiFrame,
+} from "../lib/ascii";
 import { saveLibraryItem, makeThumbnail, genId } from "../lib/library";
-import { exportGif, exportMp4, exportPng, exportJpeg, exportSvg, exportHtml, framesToText } from "../lib/export";
+import { exportGif, exportMp4, exportPng, exportJpeg } from "../lib/export";
 import { makeFilename, triggerDownload, getExportBg } from "../types";
 import ControlsPanel from "./ControlsPanel";
 
@@ -17,6 +20,7 @@ interface Props {
 }
 
 type Stage = "idle" | "live" | "recording" | "choosing" | "exporting";
+const IS_DEV = import.meta.env?.DEV === true;
 
 export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated, exportFg, onExportFgChange }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -29,13 +33,12 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const recordedRef = useRef<AsciiFrame[]>([]);
   const liveFpsRef = useRef(15);
   const fpsTimesRef = useRef<number[]>([]);
-  const lastRenderRef = useRef<{ drawW: number; drawH: number; chars: string } | null>(null);
+  const lastFrameRef = useRef<AsciiFrame | null>(null);
   const stageRef = useRef<Stage>("idle");
-  const fitRef = useRef({ cols: 80, rows: 40 });
+  const fitRef = useRef({ cols: 140, rows: 80 });
   const fontSizeRef = useRef(fontSize);
-  const displayFsRef = useRef(fontSize);
   const colorInputRef = useRef<HTMLInputElement>(null);
-  const lastFrameTime = useRef(0);
+  const devPerfRef = useRef({ processMs: 0, domMs: 0 });
 
   const [stage, setStageState] = useState<Stage>("idle");
   const [capturedCount, setCapturedCount] = useState(0);
@@ -45,48 +48,44 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 720);
   const [exportStatus, setExportStatus] = useState("");
   const [isMobile] = useState(() => window.innerWidth <= 720);
+  const [devPerf, setDevPerf] = useState({ processMs: 0, domMs: 0 });
 
   const setStage = (s: Stage) => { stageRef.current = s; setStageState(s); };
 
   useEffect(() => { optsRef.current = opts; }, [opts]);
 
-  // Auto-size the ASCII grid to fill the ascii-area exactly.
-  // fitRef tracks cols/rows for processFrame; displayFsRef tracks the font size
-  // that makes that grid fill the container (decoupled from the user "detail" slider).
-  const CHAR_W_RATIO = 0.575;
-  const CHAR_H_RATIO = 1.15;
-
-  const recompute = () => {
-    const area = areaRef.current;
-    if (!area) return;
-    const W = area.clientWidth;
-    const H = area.clientHeight;
-    if (!W || !H) return;
-    const fs = fontSizeRef.current;
-    const cols = Math.max(10, Math.floor(W / (fs * CHAR_W_RATIO)));
-    const rows = Math.max(5,  Math.floor(H / (fs * CHAR_H_RATIO)));
-    fitRef.current = { cols, rows };
-    // font size that makes the grid fill the container
-    const dfx = W / (cols * CHAR_W_RATIO);
-    const dfy = H / (rows * CHAR_H_RATIO);
-    displayFsRef.current = Math.min(dfx, dfy);
-  };
-
+  // Auto-size the ASCII grid to fill the ascii-area — with resolution cap
   useEffect(() => {
     fontSizeRef.current = fontSize;
-    recompute();
+    const area = areaRef.current;
+    if (!area) return;
+    const { width, height } = area.getBoundingClientRect();
+    if (!width || !height) return;
+    const [cols, rows] = clampDimensions(
+      Math.max(10, Math.floor(width  / (fontSize * 0.575))),
+      Math.max(5,  Math.floor(height / (fontSize * 1.15))),
+    );
+    fitRef.current = { cols, rows };
   }, [fontSize]);
 
   useEffect(() => {
     const area = areaRef.current;
     if (!area) return;
-    const obs = new ResizeObserver(() => recompute());
+    const obs = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (!width || !height) return;
+      const fs = fontSizeRef.current;
+      const [cols, rows] = clampDimensions(
+        Math.max(10, Math.floor(width  / (fs * 0.575))),
+        Math.max(5,  Math.floor(height / (fs * 1.15))),
+      );
+      fitRef.current = { cols, rows };
+    });
     obs.observe(area);
-    recompute();
     return () => obs.disconnect();
   }, []);
 
-  const renderLoop = useCallback((timestamp: number) => {
+  const renderLoop = useCallback(() => {
     const video = videoRef.current;
     const pre = preRef.current;
     if (!video || !pre || video.readyState < 2) {
@@ -94,36 +93,46 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       return;
     }
 
-    // Cap at 30fps to balance quality vs CPU (video call feel without burning battery)
-    const elapsed = timestamp - lastFrameTime.current;
-    if (elapsed < 33) { rafRef.current = requestAnimationFrame(renderLoop); return; }
-    lastFrameTime.current = timestamp - (elapsed % 33);
+    const t0 = IS_DEV ? performance.now() : 0;
 
-    const result = renderToHtml(video, offscreen.current, {
+    // Fast mode: skip expensive image-processing passes during live video
+    const fastMode = true;
+
+    const frame = processFrame(video, offscreen.current, {
       ...optsRef.current,
       asciiW: fitRef.current.cols,
       asciiH: fitRef.current.rows,
-    }, true);
+    }, true, undefined, fastMode);
 
-    if (result) {
-      pre.innerHTML = result.html;
-      pre.style.fontSize = `${displayFsRef.current.toFixed(2)}px`;
-      pre.style.lineHeight = "1.15";
-      lastRenderRef.current = { drawW: result.drawW, drawH: result.drawH, chars: result.chars };
+    if (frame) {
+      lastFrameRef.current = frame;
+
+      const t1 = IS_DEV ? performance.now() : 0;
+
+      // Use textContent for non-color mode — avoids innerHTML parsing overhead
+      domRenderer.render(frame, pre);
+
+      if (IS_DEV) {
+        const domMs = performance.now() - t1;
+        const processMs = t1 - t0;
+        devPerfRef.current = { processMs, domMs };
+        // Throttle state update to every 30 frames to avoid React overhead
+        if (fpsTimesRef.current.length % 30 === 0) {
+          setDevPerf({ processMs: Math.round(processMs * 10) / 10, domMs: Math.round(domMs * 10) / 10 });
+        }
+      }
 
       if (stageRef.current === "recording") {
-        // Snapshot shared buffers immediately — they're valid until next renderToHtml call
-        const frame = snapshotFromBuffers(result.drawW, result.drawH, result.chars, optsRef.current);
         recordedRef.current.push(frame);
         setRecCount(c => c + 1);
       }
-
       const now = performance.now();
       fpsTimesRef.current.push(now);
-      if (fpsTimesRef.current.length > 20) fpsTimesRef.current.shift();
+      if (fpsTimesRef.current.length > 30) fpsTimesRef.current.shift();
       if (fpsTimesRef.current.length > 1) {
         const f = Math.round((fpsTimesRef.current.length - 1) / (now - fpsTimesRef.current[0]) * 1000);
-        setFps(f); liveFpsRef.current = f || 15;
+        setFps(f);
+        liveFpsRef.current = f || 15;
       }
     }
     rafRef.current = requestAnimationFrame(renderLoop);
@@ -190,13 +199,8 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
 
   const captureFrame = () => {
     stopStream();
-    const last = lastRenderRef.current;
-    if (last) {
-      const frame = snapshotFromBuffers(last.drawW, last.drawH, last.chars, optsRef.current);
-      recordedRef.current = [frame];
-    } else {
-      recordedRef.current = [];
-    }
+    const frame = lastFrameRef.current;
+    recordedRef.current = frame ? [frame] : [];
     setCapturedCount(recordedRef.current.length);
     setStage("choosing");
   };
@@ -214,36 +218,29 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     setStage("idle");
   };
 
-  const doExport = async (format: "txt" | "png" | "jpeg" | "svg" | "html" | "gif" | "mp4") => {
+  const doExport = async (format: "txt" | "png" | "jpeg" | "gif" | "mp4") => {
     const frames = recordedRef.current;
     const isMulti = frames.length > 1;
     const o = optsRef.current;
     const bg = getExportBg(exportFg);
-    const exportFontSize = Math.max(12, fontSize); // min 12px for quality exports
     setStage("exporting");
     setExportStatus(`Generating ${format.toUpperCase()}…`);
     try {
       if (format === "txt") {
-        const text = frames.length ? framesToText(frames) : (preRef.current?.innerText ?? "");
+        const text = frames.length ? frames.map(f => frameToText(f)).join("\n\n") : (preRef.current?.innerText ?? "");
         triggerDownload(new Blob([text], { type: "text/plain" }), makeFilename("ascii", "txt"));
       } else if (format === "png") {
         const f = frames[0]; if (!f) throw new Error("No frame");
-        triggerDownload(await exportPng(f, exportFontSize, exportFg, bg, o.color), makeFilename("ascii", "png"));
+        triggerDownload(await exportPng(f, fontSize, exportFg, bg, o.color), makeFilename("ascii", "png"));
       } else if (format === "jpeg") {
         const f = frames[0]; if (!f) throw new Error("No frame");
-        triggerDownload(await exportJpeg(f, exportFontSize, exportFg, bg, o.color), makeFilename("ascii", "jpg"));
-      } else if (format === "svg") {
-        const f = frames[0]; if (!f) throw new Error("No frame");
-        triggerDownload(exportSvg(f, exportFontSize, exportFg, bg, o.color), makeFilename("ascii", "svg"));
-      } else if (format === "html") {
-        const f = frames[0]; if (!f) throw new Error("No frame");
-        triggerDownload(exportHtml(f, exportFontSize, exportFg, bg, o.color), makeFilename("ascii", "html"));
+        triggerDownload(await exportJpeg(f, fontSize, exportFg, bg, o.color), makeFilename("ascii", "jpg"));
       } else if (format === "gif") {
         if (!isMulti) throw new Error("No frames for GIF");
-        triggerDownload(await exportGif(frames, exportFontSize, exportFg, bg, o.color, liveFpsRef.current), makeFilename("ascii", "gif"));
+        triggerDownload(await exportGif(frames, fontSize, exportFg, bg, o.color, liveFpsRef.current), makeFilename("ascii", "gif"));
       } else if (format === "mp4") {
         if (!isMulti) throw new Error("No frames for MP4");
-        const blob = await exportMp4(frames, exportFontSize, exportFg, bg, o.color, liveFpsRef.current);
+        const blob = await exportMp4(frames, fontSize, exportFg, bg, o.color, liveFpsRef.current);
         triggerDownload(blob, makeFilename("ascii", blob.type.includes("webm") ? "webm" : "mp4"));
       }
       await saveToLibrary(frames, o);
@@ -262,10 +259,29 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const saveToLibrary = async (frames: AsciiFrame[], o: AsciiOptions) => {
     if (!frames.length) return;
     const charset = o.charset || " .:-=+*#%@";
-    const frameH = frames[0].length;
-    const frameW = frames[0][0]?.length ?? 0;
-    const idxFrames = frames.map(f => f.map(row => row.map(c => c.charIdx)));
-    const colorFrames = o.color ? frames.map(f => f.map(row => row.map(c => [c.r, c.g, c.b]))) : undefined;
+    const frameH = frames[0].height;
+    const frameW = frames[0].width;
+    const idxFrames = frames.map(f => {
+      const rows: number[][] = [];
+      for (let y = 0; y < f.height; y++) {
+        const row: number[] = [];
+        for (let x = 0; x < f.width; x++) row.push(f.chars[y * f.width + x]);
+        rows.push(row);
+      }
+      return rows;
+    });
+    const colorFrames = o.color ? frames.map(f => {
+      const rows: [number,number,number][][] = [];
+      for (let y = 0; y < f.height; y++) {
+        const row: [number,number,number][] = [];
+        for (let x = 0; x < f.width; x++) {
+          const i = y * f.width + x;
+          row.push([f.r[i], f.g[i], f.b[i]]);
+        }
+        rows.push(row);
+      }
+      return rows;
+    }) : undefined;
     await saveLibraryItem({
       id: genId(),
       name: makeFilename(frames.length > 1 ? "rec" : "capture", "txt"),
@@ -288,6 +304,11 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
         <div className="toolbar-left">
           {(stage === "live" || stage === "recording") && (
             <span className={`badge${fps < 8 ? " badge-warn" : ""}`}>{fps} fps</span>
+          )}
+          {IS_DEV && (stage === "live" || stage === "recording") && (
+            <span className="badge" style={{ opacity: 0.55, fontSize: 9 }}>
+              proc {devPerf.processMs}ms · dom {devPerf.domMs}ms
+            </span>
           )}
           {stage === "recording" && <span className="badge badge-rec">● REC {recCount}f</span>}
           {error && <span className="badge badge-err">⚠ {error}</span>}
@@ -336,7 +357,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
               </p>
             </div>
           )}
-          <pre ref={preRef} className="ascii-output" />
+          <pre ref={preRef} className="ascii-output" style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }} />
         </div>
         {panelOpen && (stage === "live" || stage === "recording") && (
           <div className="controls-panel-wrap">
@@ -377,19 +398,11 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
               </button>
               <button className="export-opt" onClick={() => doExport("png")}>
                 <span className="export-opt-icon">PNG</span>
-                <span className="export-opt-label">Hi-res image</span>
+                <span className="export-opt-label">Image</span>
               </button>
               <button className="export-opt" onClick={() => doExport("jpeg")}>
                 <span className="export-opt-icon">JPG</span>
-                <span className="export-opt-label">Hi-res image</span>
-              </button>
-              <button className="export-opt" onClick={() => doExport("svg")}>
-                <span className="export-opt-icon">SVG</span>
-                <span className="export-opt-label">Vector + color</span>
-              </button>
-              <button className="export-opt" onClick={() => doExport("html")}>
-                <span className="export-opt-icon">HTML</span>
-                <span className="export-opt-label">Color text</span>
+                <span className="export-opt-label">Image</span>
               </button>
               {isMulti && (
                 <>
