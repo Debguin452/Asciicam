@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  processFrame, frameToText, domRenderer, clampDimensions, resetTemporalSmoothing,
-  type AsciiOptions, type AsciiFrame,
-} from "../lib/ascii";
+import { processFrame, frameToHtml, resetTemporalSmoothing, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
 import { saveLibraryItem, makeThumbnail, genId } from "../lib/library";
-import { exportGif, exportMp4, exportPng, exportJpeg } from "../lib/export";
+import { exportGif, exportMp4, exportPng, exportJpeg, framesToText } from "../lib/export";
 import { makeFilename, triggerDownload, getExportBg } from "../types";
 import ControlsPanel from "./ControlsPanel";
 
@@ -20,7 +17,6 @@ interface Props {
 }
 
 type Stage = "idle" | "live" | "recording" | "choosing" | "exporting";
-const IS_DEV = import.meta.env?.DEV === true;
 
 export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated, exportFg, onExportFgChange }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -38,7 +34,6 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const fitRef = useRef({ cols: 140, rows: 80 });
   const fontSizeRef = useRef(fontSize);
   const colorInputRef = useRef<HTMLInputElement>(null);
-  const devPerfRef = useRef({ processMs: 0, domMs: 0 });
 
   const [stage, setStageState] = useState<Stage>("idle");
   const [capturedCount, setCapturedCount] = useState(0);
@@ -48,24 +43,22 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 720);
   const [exportStatus, setExportStatus] = useState("");
   const [isMobile] = useState(() => window.innerWidth <= 720);
-  const [devPerf, setDevPerf] = useState({ processMs: 0, domMs: 0 });
 
   const setStage = (s: Stage) => { stageRef.current = s; setStageState(s); };
 
   useEffect(() => { optsRef.current = opts; }, [opts]);
 
-  // Auto-size the ASCII grid to fill the ascii-area — with resolution cap
+  // Auto-size the ASCII grid to fill the ascii-area exactly
   useEffect(() => {
     fontSizeRef.current = fontSize;
     const area = areaRef.current;
     if (!area) return;
     const { width, height } = area.getBoundingClientRect();
     if (!width || !height) return;
-    const [cols, rows] = clampDimensions(
-      Math.max(10, Math.floor(width  / (fontSize * 0.575))),
-      Math.max(5,  Math.floor(height / (fontSize * 1.15))),
-    );
-    fitRef.current = { cols, rows };
+    fitRef.current = {
+      cols: Math.max(10, Math.floor(width  / (fontSize * 0.575))),
+      rows: Math.max(5,  Math.floor(height / (fontSize * 1.15))),
+    };
   }, [fontSize]);
 
   useEffect(() => {
@@ -75,11 +68,10 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       const { width, height } = entry.contentRect;
       if (!width || !height) return;
       const fs = fontSizeRef.current;
-      const [cols, rows] = clampDimensions(
-        Math.max(10, Math.floor(width  / (fs * 0.575))),
-        Math.max(5,  Math.floor(height / (fs * 1.15))),
-      );
-      fitRef.current = { cols, rows };
+      fitRef.current = {
+        cols: Math.max(10, Math.floor(width  / (fs * 0.575))),
+        rows: Math.max(5,  Math.floor(height / (fs * 1.15))),
+      };
     });
     obs.observe(area);
     return () => obs.disconnect();
@@ -92,36 +84,14 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       rafRef.current = requestAnimationFrame(renderLoop);
       return;
     }
-
-    const t0 = IS_DEV ? performance.now() : 0;
-
-    // Fast mode: skip expensive image-processing passes during live video
-    const fastMode = true;
-
     const frame = processFrame(video, offscreen.current, {
       ...optsRef.current,
       asciiW: fitRef.current.cols,
       asciiH: fitRef.current.rows,
-    }, true, undefined, fastMode);
-
+    }, true);
     if (frame) {
       lastFrameRef.current = frame;
-
-      const t1 = IS_DEV ? performance.now() : 0;
-
-      // Use textContent for non-color mode — avoids innerHTML parsing overhead
-      domRenderer.render(frame, pre);
-
-      if (IS_DEV) {
-        const domMs = performance.now() - t1;
-        const processMs = t1 - t0;
-        devPerfRef.current = { processMs, domMs };
-        // Throttle state update to every 30 frames to avoid React overhead
-        if (fpsTimesRef.current.length % 30 === 0) {
-          setDevPerf({ processMs: Math.round(processMs * 10) / 10, domMs: Math.round(domMs * 10) / 10 });
-        }
-      }
-
+      pre.innerHTML = frameToHtml(frame, optsRef.current.color);
       if (stageRef.current === "recording") {
         recordedRef.current.push(frame);
         setRecCount(c => c + 1);
@@ -227,7 +197,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     setExportStatus(`Generating ${format.toUpperCase()}…`);
     try {
       if (format === "txt") {
-        const text = frames.length ? frames.map(f => frameToText(f)).join("\n\n") : (preRef.current?.innerText ?? "");
+        const text = frames.length ? framesToText(frames) : (preRef.current?.innerText ?? "");
         triggerDownload(new Blob([text], { type: "text/plain" }), makeFilename("ascii", "txt"));
       } else if (format === "png") {
         const f = frames[0]; if (!f) throw new Error("No frame");
@@ -259,29 +229,10 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const saveToLibrary = async (frames: AsciiFrame[], o: AsciiOptions) => {
     if (!frames.length) return;
     const charset = o.charset || " .:-=+*#%@";
-    const frameH = frames[0].height;
-    const frameW = frames[0].width;
-    const idxFrames = frames.map(f => {
-      const rows: number[][] = [];
-      for (let y = 0; y < f.height; y++) {
-        const row: number[] = [];
-        for (let x = 0; x < f.width; x++) row.push(f.chars[y * f.width + x]);
-        rows.push(row);
-      }
-      return rows;
-    });
-    const colorFrames = o.color ? frames.map(f => {
-      const rows: [number,number,number][][] = [];
-      for (let y = 0; y < f.height; y++) {
-        const row: [number,number,number][] = [];
-        for (let x = 0; x < f.width; x++) {
-          const i = y * f.width + x;
-          row.push([f.r[i], f.g[i], f.b[i]]);
-        }
-        rows.push(row);
-      }
-      return rows;
-    }) : undefined;
+    const frameH = frames[0].length;
+    const frameW = frames[0][0]?.length ?? 0;
+    const idxFrames = frames.map(f => f.map(row => row.map(c => c.charIdx)));
+    const colorFrames = o.color ? frames.map(f => f.map(row => row.map(c => [c.r, c.g, c.b]))) : undefined;
     await saveLibraryItem({
       id: genId(),
       name: makeFilename(frames.length > 1 ? "rec" : "capture", "txt"),
@@ -304,11 +255,6 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
         <div className="toolbar-left">
           {(stage === "live" || stage === "recording") && (
             <span className={`badge${fps < 8 ? " badge-warn" : ""}`}>{fps} fps</span>
-          )}
-          {IS_DEV && (stage === "live" || stage === "recording") && (
-            <span className="badge" style={{ opacity: 0.55, fontSize: 9 }}>
-              proc {devPerf.processMs}ms · dom {devPerf.domMs}ms
-            </span>
           )}
           {stage === "recording" && <span className="badge badge-rec">● REC {recCount}f</span>}
           {error && <span className="badge badge-err">⚠ {error}</span>}
