@@ -120,6 +120,13 @@ function encode(
 
 function decode(buf: ArrayBuffer, prevFrame: RemoteFrame | null): RemoteFrame | null {
   try {
+    console.log(
+  "RECV",
+  w,
+  h,
+  charIndices.length,
+  isDelta ? "DELTA" : "KEY"
+);
     const view = new DataView(buf);
     const flags = view.getUint8(1);
     const w = view.getUint16(2, false);
@@ -138,11 +145,14 @@ function decode(buf: ArrayBuffer, prevFrame: RemoteFrame | null): RemoteFrame | 
     const charIndices = new Uint16Array(N);
 
     if (isDelta) {
-      // copy prev if same size
-      if (prevFrame && prevFrame.charIndices.length === N) {
-        charIndices.set(prevFrame.charIndices);
-      }
-      for (let i = 0; i < stream.length - 1; i += 2) {
+  if (!prevFrame || prevFrame.charIndices.length !== N) {
+    console.warn("Delta frame without base frame");
+    return null;
+  }
+
+  charIndices.set(prevFrame.charIndices);
+
+  for (let i = 0; i < stream.length - 1; i += 2) {{
         const pos = stream[i], idx = stream[i + 1];
         if (pos < N) charIndices[pos] = idx;
       }
@@ -175,7 +185,7 @@ export class CallManager {
 
   private prevSentIndices: Uint16Array | null = null;
   private prevRecvFrame: RemoteFrame | null = null;
-  private keyframeInterval = 30; // send a full keyframe every N frames
+  private keyframeInterval = 10; // send a full keyframe every N frames
   private frameCount = 0;
 
   private lastSentAt = 0;
@@ -241,9 +251,9 @@ export class CallManager {
 
     // Data channel for ASCII frames
     const conn = this.peer.connect(remoteId.trim(), {
-      reliable: false,
-      serialization: "binary",
-    });
+  reliable: true,
+  serialization: "binary",
+});
     this.attachData(conn);
 
     // Media channel for audio
@@ -259,16 +269,37 @@ export class CallManager {
     this.dataConn = conn;
     conn.on("open", () => {
       if (this.events) this.events.onStatus("connected");
+      console.log("DATA CHANNEL OPEN");
     });
-    conn.on("data", (data: unknown) => {
-      if (data instanceof ArrayBuffer) {
-        const frame = decode(data, this.prevRecvFrame);
-        if (frame) {
-          this.prevRecvFrame = frame;
-          this.events.onRemoteFrame(frame);
-        }
-      }
-    });
+    conn.on("data", async (data: unknown) => {
+  let buf: ArrayBuffer | null = null;
+
+  if (data instanceof ArrayBuffer) {
+    buf = data;
+  } else if (data instanceof Uint8Array) {
+    buf = data.buffer.slice(
+      data.byteOffset,
+      data.byteOffset + data.byteLength
+    );
+  } else if (data instanceof Blob) {
+    buf = await data.arrayBuffer();
+  }
+
+  if (!buf) return;
+
+  const frame = decode(buf, this.prevRecvFrame);
+
+  if (frame) {
+    this.prevRecvFrame = frame;
+    console.log(
+      "FRAME",
+      frame.w,
+      frame.h,
+      frame.charIndices.length
+    );
+    this.events.onRemoteFrame(frame);
+  }
+});
     conn.on("close",  () => this.events.onStatus("closed"));
     conn.on("error", err => this.events.onStatus("error", err.message));
   }
@@ -279,12 +310,20 @@ export class CallManager {
     h: number,
     charset: string,
     colors: Uint8Array | null
+    
   ) {
     if (!this.dataConn?.open) return;
     const now = performance.now();
     const minInterval = 1000 / this.targetFps;
     if (now - this.lastSentAt < minInterval) return;
     this.lastSentAt = now;
+    console.log(
+  "SEND",
+  w,
+  h,
+  charIndices.length,
+  isKey ? "KEY" : "DELTA"
+);
 
     this.frameCount++;
     const isKey = this.frameCount % this.keyframeInterval === 1;
