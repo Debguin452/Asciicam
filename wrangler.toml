@@ -4,4 +4,4 @@ pages_build_output_dir = "dist"
 
 [[kv_namespaces]]
 binding = "ROOMS_KV"
-id = "7eec9df554144e938fc3615137e21e6c"
+id = "32d79302371b41ab8da1cc28acf6300a"
