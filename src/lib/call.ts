@@ -1,580 +1,278 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  renderToString, resetTemporalSmoothing, sortCharsetByDensity,
-  getPoolCharIdx, getPoolColors, getPoolDims,
-  type AsciiOptions,
-} from "../lib/ascii";
-import { CallManager, type CallStatus, type RemoteFrame } from "../lib/call";
+import Peer, { type DataConnection, type MediaConnection } from "peerjs";
 
-interface Props {
-  opts: AsciiOptions;
-  updateOpt: <K extends keyof AsciiOptions>(k: K, v: AsciiOptions[K]) => void;
+export type CallStatus = "idle"|"connecting"|"waiting"|"connected"|"error"|"closed";
+
+export interface RemoteFrame {
+  w: number; h: number;
+  charset: string;
+  charIndices: Uint16Array;
+  colors?: Uint8Array; // r,g,b per cell
 }
 
-type Screen = "home" | "starting" | "in-call";
-type Facing = "user" | "environment";
-type Mode  = "host" | "guest" | null;
+export interface CallManagerEvents {
+  onStatus: (status: CallStatus, detail?: string) => void;
+  onRemoteFrame: (frame: RemoteFrame) => void;
+  onRemoteHangup: () => void;
+  onRemoteStream: (stream: MediaStream) => void;
+}
 
-function paintRemote(frame: RemoteFrame, pre: HTMLPreElement) {
-  const { w, h, charset, charIndices, colors } = frame;
-  const lines: string[] = [];
-  if (colors) {
-    for (let y = 0; y < h; y++) {
-      const parts: string[] = [];
-      let rr = -1, rg = -1, rb = -1, rt = "";
-      for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const ch = charset[charIndices[i]] ?? " ";
-        const d = ch === " " ? "\u00a0" : ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : ch;
-        const cr = colors[i*3], cg = colors[i*3+1], cb = colors[i*3+2];
-        if (cr === rr && cg === rg && cb === rb) { rt += d; }
-        else {
-          if (rt) parts.push(`<span style="color:rgb(${rr},${rg},${rb})">${rt}</span>`);
-          rr = cr; rg = cg; rb = cb; rt = d;
-        }
-      }
-      if (rt) parts.push(`<span style="color:rgb(${rr},${rg},${rb})">${rt}</span>`);
-      lines.push(parts.join(""));
+// Free STUN + Open Relay free TURN (no signup required)
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:global.stun.twilio.com:3478" },
+  // Open Relay free TURN — handles symmetric NAT (no account needed)
+  { urls: "turn:openrelay.metered.ca:80",       username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443",      username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+];
+
+function toArrayBuffer(data: unknown): ArrayBuffer | null {
+  if (data instanceof ArrayBuffer) return data;
+  // PeerJS "binary" (BinaryPack) typically decodes to Uint8Array
+  if (data instanceof Uint8Array) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  if (ArrayBuffer.isView(data)) {
+    const v = data as ArrayBufferView;
+    return v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) as ArrayBuffer;
+  }
+  // BinaryPack may wrap as { data: number[], type: "Buffer" }
+  if (data && typeof data === "object" && "data" in data) {
+    const inner = (data as { data: unknown }).data;
+    if (inner instanceof Uint8Array) return inner.buffer.slice(inner.byteOffset, inner.byteOffset + inner.byteLength) as ArrayBuffer;
+    if (Array.isArray(inner)) return new Uint8Array(inner as number[]).buffer;
+  }
+  if (data instanceof Blob) return null; // handled async by caller
+  return null;
+}
+
+function encode(
+  charIndices: Uint16Array, w: number, h: number,
+  charset: string, colors: Uint8Array | null,
+  prevIndices: Uint16Array | null
+): ArrayBuffer {
+  const N = w * h;
+  const charsetBytes = new TextEncoder().encode(charset);
+  const isDelta = prevIndices !== null && prevIndices.length === N;
+  const hasColor = colors !== null && colors.length === N * 3;
+  let streamBytes: Uint8Array;
+
+  if (isDelta && prevIndices) {
+    // Delta: [pos u16, charIdx u16] pairs for changed cells only
+    const changed: number[] = [];
+    for (let i = 0; i < N; i++) {
+      if (charIndices[i] !== prevIndices[i]) changed.push(i, charIndices[i]);
     }
-    pre.innerHTML = lines.join("\n");
+    const buf = new Uint16Array(changed.length);
+    for (let i = 0; i < changed.length; i++) buf[i] = changed[i];
+    streamBytes = new Uint8Array(buf.buffer);
   } else {
-    for (let y = 0; y < h; y++) {
-      let line = "";
-      for (let x = 0; x < w; x++) {
-        const ch = charset[charIndices[y * w + x]] ?? " ";
-        line += ch === " " ? "\u00a0" : ch;
-      }
-      lines.push(line);
+    // RLE keyframe: [charIdx u16, runLen u16] pairs
+    const runs: number[] = [];
+    let i = 0;
+    while (i < N) {
+      const val = charIndices[i]; let len = 1;
+      while (i+len < N && charIndices[i+len] === val && len < 65535) len++;
+      runs.push(val, len); i += len;
     }
-    pre.textContent = lines.join("\n");
+    const buf = new Uint16Array(runs.length);
+    for (let j = 0; j < runs.length; j++) buf[j] = runs[j];
+    streamBytes = new Uint8Array(buf.buffer);
   }
+
+  let flags = 0;
+  if (hasColor) flags |= 0x01;
+  if (isDelta)  flags |= 0x02;
+  else          flags |= 0x04;
+
+  const headerSize = 8 + charsetBytes.length;
+  const colorSize = hasColor ? N * 3 : 0;
+  const total = headerSize + streamBytes.length + colorSize;
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  view.setUint8(0, 1); view.setUint8(1, flags);
+  view.setUint16(2, w, false); view.setUint16(4, h, false);
+  view.setUint16(6, charsetBytes.length, false);
+  out.set(charsetBytes, 8);
+  out.set(streamBytes, headerSize);
+  if (hasColor && colors) out.set(colors, headerSize + streamBytes.length);
+  return out.buffer;
 }
 
-const CALL_OPTS: Partial<AsciiOptions> = {
-  asciiW: 60, asciiH: 34, brightness: 0, contrast: 100,
-  gamma: 1.0, temporalSmoothing: true, color: false,
-  noiseReduction: false, localContrast: false, histEq: false,
-};
-
-async function apiCreate(peerId: string): Promise<string | null> {
+function decode(buf: ArrayBuffer, prevFrame: RemoteFrame | null): RemoteFrame | null {
   try {
-    const r = await fetch("/api/rooms", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peerId }),
-    });
-    return r.ok ? ((await r.json()) as { code?: string }).code ?? null : null;
-  } catch { return null; }
-}
+    const view = new DataView(buf);
+    const flags = view.getUint8(1);
+    const w = view.getUint16(2, false), h = view.getUint16(4, false);
+    const csLen = view.getUint16(6, false);
+    const charset = new TextDecoder().decode(new Uint8Array(buf, 8, csLen));
+    const N = w * h;
+    const hasColor = !!(flags & 0x01), isDelta = !!(flags & 0x02);
+    const streamStart = 8 + csLen;
+    const streamEnd = hasColor ? buf.byteLength - N * 3 : buf.byteLength;
+    const streamBytes = new Uint8Array(buf, streamStart, streamEnd - streamStart);
+    const stream = new Uint16Array(streamBytes.buffer.slice(streamBytes.byteOffset, streamBytes.byteOffset + streamBytes.byteLength));
+    const charIndices = new Uint16Array(N);
 
-async function apiJoin(code: string, peerId: string): Promise<string | null> {
-  try {
-    const r = await fetch(`/api/rooms/${code}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peerId }),
-    });
-    if (!r.ok) return null;
-    const d = await r.json() as { peers?: string[] };
-    return (d.peers ?? []).find(p => p !== peerId) ?? null;
-  } catch { return null; }
-}
-
-async function apiLeave(code: string, peerId: string) {
-  try {
-    await fetch(`/api/rooms/${code}`, {
-      method: "DELETE", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peerId }),
-    });
-  } catch { /**/ }
-}
-
-function apiLeaveBeacon(code: string, peerId: string) {
-  if (!code || !peerId) return;
-  const blob = new Blob([JSON.stringify({ peerId })], { type: "application/json" });
-  const sent = navigator.sendBeacon ? navigator.sendBeacon(`/api/rooms/${code}`, blob) : false;
-  if (!sent) {
-    fetch(`/api/rooms/${code}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peerId }),
-      keepalive: true,
-    }).catch(() => {});
-  }
-}
-
-export default function CallTab({ opts, updateOpt }: Props) {
-  const videoRef      = useRef<HTMLVideoElement>(null);
-  const audioRef      = useRef<HTMLAudioElement>(null);
-  const offscreen     = useRef(document.createElement("canvas"));
-  const localPreRef   = useRef<HTMLPreElement>(null);
-  const remotePreRef  = useRef<HTMLPreElement>(null);
-  const localAreaRef  = useRef<HTMLDivElement>(null);
-  const rafRef        = useRef(0);
-  const streamRef     = useRef<MediaStream | null>(null);
-  const callRef       = useRef<CallManager | null>(null);
-  const optsRef       = useRef(opts);
-  const fitRef        = useRef({ cols: 60, rows: 34 });
-  const fsRef         = useRef(10);
-  const myIdRef       = useRef("");
-  const roomRef       = useRef("");
-  const modeRef       = useRef<Mode>(null);
-
-  const [screen,      setScreen]      = useState<Screen>("home");
-  const [callStatus,  setCallStatus]  = useState<CallStatus>("idle");
-  const [mode,        setMode]        = useState<Mode>(null);
-  const [myCode,      setMyCode]      = useState("");
-  const [joinVal,     setJoinVal]     = useState("");
-  const [camErr,      setCamErr]      = useState<string | null>(null);
-  const [connectErr,  setConnectErr]  = useState<string | null>(null);
-  const [muted,       setMuted]       = useState(false);
-  const [camOff,      setCamOff]      = useState(false);
-  const [facing,      setFacing]      = useState<Facing>("user");
-  const [colorMode,   setColorMode]   = useState(false);
-  const [remoteHere,  setRemoteHere]  = useState(false);
-  const [fps,         setFps]         = useState(0);
-  const [copied,      setCopied]      = useState(false);
-  const [joining,     setJoining]     = useState(false);
-  const [starting,    setStarting]    = useState(false);
-
-  const fpsT = useRef<number[]>([]);
-
-  useEffect(() => { optsRef.current = opts; }, [opts]);
-
-  useEffect(() => {
-    Object.entries(CALL_OPTS).forEach(([k, v]) => updateOpt(k as keyof AsciiOptions, v as never));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const el = localAreaRef.current; if (!el) return;
-    const obs = new ResizeObserver(([e]) => {
-      const { width, height } = e.contentRect;
-      const fs = fsRef.current;
-      if (width && height) fitRef.current = {
-        cols: Math.max(10, Math.floor(width  / (fs * 0.575))),
-        rows: Math.max(5,  Math.floor(height / (fs * 1.15))),
-      };
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
-  // Clear KV on page unload/hide
-  useEffect(() => {
-    const onLeave = () => {
-      if (roomRef.current && myIdRef.current) {
-        apiLeaveBeacon(roomRef.current, myIdRef.current);
+    if (isDelta) {
+      if (prevFrame && prevFrame.charIndices.length === N) charIndices.set(prevFrame.charIndices);
+      for (let i = 0; i < stream.length - 1; i += 2) {
+        const pos = stream[i], idx = stream[i+1];
+        if (pos < N) charIndices[pos] = idx;
       }
-    };
-    window.addEventListener("pagehide", onLeave);
-    window.addEventListener("beforeunload", onLeave);
-    return () => {
-      window.removeEventListener("pagehide", onLeave);
-      window.removeEventListener("beforeunload", onLeave);
-    };
-  }, []);
-
-  const initMgr = useCallback(() => {
-    const mgr = new CallManager({
-      onStatus: (s, detail) => {
-        setCallStatus(s);
-        if (s === "error") setConnectErr(detail ?? "Connection failed");
-        if (s === "connected") { setConnectErr(null); setScreen("in-call"); }
-      },
-      onRemoteFrame: (f: RemoteFrame) => {
-        setRemoteHere(true);
-        if (remotePreRef.current) paintRemote(f, remotePreRef.current);
-      },
-      onRemoteHangup: () => { setRemoteHere(false); setCallStatus("closed"); },
-      onRemoteStream: (s: MediaStream) => {
-        if (audioRef.current) { audioRef.current.srcObject = s; audioRef.current.play().catch(() => {}); }
-      },
-    });
-    callRef.current = mgr;
-    mgr.start().then(id => { myIdRef.current = id; }).catch(() => {});
-  }, []);
-
-  useEffect(() => { initMgr(); return () => callRef.current?.hangup(); }, [initMgr]);
-
-  const renderLoop = useCallback(() => {
-    const video = videoRef.current, pre = localPreRef.current;
-    if (!video || !pre || video.readyState < 2) {
-      rafRef.current = requestAnimationFrame(renderLoop); return;
-    }
-    if (camOff) { rafRef.current = requestAnimationFrame(renderLoop); return; }
-
-    const o = optsRef.current;
-    const result = renderToString(video, offscreen.current, {
-      ...o, ...CALL_OPTS, asciiW: fitRef.current.cols, asciiH: fitRef.current.rows,
-      color: colorMode,
-    }, facing === "user", "html");
-
-    if (result) {
-      const { html, isColor } = result;
-      if (isColor) pre.innerHTML = html; else pre.textContent = html;
-
-      if (callRef.current?.isConnected) {
-        const { w, h } = getPoolDims();
-        if (w > 0 && h > 0) {
-          const N = w * h;
-          const raw = getPoolCharIdx();
-          const indices = raw.length === N ? raw : raw.slice(0, N);
-          let colors: Uint8Array | null = null;
-          if (colorMode) {
-            const c = getPoolColors();
-            colors = new Uint8Array(N * 3);
-            for (let i = 0; i < N; i++) { colors[i*3]=c.r[i]; colors[i*3+1]=c.g[i]; colors[i*3+2]=c.b[i]; }
-          }
-          callRef.current.sendFrame(
-            indices, w, h,
-            sortCharsetByDensity(o.charset || " .:-=+*#%@"),
-            colors
-          );
-        }
-      }
-      const now = performance.now();
-      fpsT.current.push(now);
-      if (fpsT.current.length > 30) fpsT.current.shift();
-      if (fpsT.current.length > 1)
-        setFps(Math.round((fpsT.current.length-1) / ((now - fpsT.current[0]) / 1000)));
-    }
-    rafRef.current = requestAnimationFrame(renderLoop);
-  }, [facing, colorMode]);
-
-  useEffect(() => {
-    if (screen !== "home") rafRef.current = requestAnimationFrame(renderLoop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [screen, renderLoop]);
-
-  useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
-
-  const startCam = async (face: Facing = facing) => {
-    setCamErr(null);
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: face, width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: true,
-      });
-      streamRef.current = s;
-      if (videoRef.current) { videoRef.current.srcObject = s; await videoRef.current.play(); }
-      callRef.current?.answerWithStream(s);
-      setCamOff(false);
-    } catch (e) { setCamErr(e instanceof Error ? e.message : "Camera denied"); }
-  };
-
-  const flipCam = () => {
-    const next: Facing = facing === "user" ? "environment" : "user";
-    setFacing(next); startCam(next);
-  };
-
-  const toggleMic = () => {
-    const t = streamRef.current?.getAudioTracks()[0]; if (!t) return;
-    t.enabled = !t.enabled; setMuted(!t.enabled);
-  };
-
-  const toggleCam = () => {
-    const t = streamRef.current?.getVideoTracks()[0]; if (!t) return;
-    t.enabled = camOff; setCamOff(!camOff);
-    if (localPreRef.current && !camOff) localPreRef.current.textContent = "";
-  };
-
-  const startCall = async () => {
-    setStarting(true); setCamErr(null); setConnectErr(null);
-    await startCam();
-    if (!myIdRef.current) await new Promise(r => setTimeout(r, 1500));
-    const code = await apiCreate(myIdRef.current) ?? myIdRef.current.slice(0, 8).toUpperCase();
-    roomRef.current = code;
-    modeRef.current = "host";
-    setMode("host");
-    setMyCode(code);
-    setScreen("starting");
-    setStarting(false);
-  };
-
-  const joinCall = async () => {
-    const code = joinVal.trim().toUpperCase();
-    if (!code) return;
-    setJoining(true); setConnectErr(null);
-    if (screen === "home") {
-      await startCam();
-      modeRef.current = "guest";
-      setMode("guest");
-      setScreen("starting");
-    }
-    const hostId = await apiJoin(code, myIdRef.current);
-    if (hostId) {
-      callRef.current?.connectTo(hostId, streamRef.current);
     } else {
-      callRef.current?.connectTo(code, streamRef.current);
+      let pos = 0;
+      for (let i = 0; i < stream.length - 1; i += 2) {
+        const val = stream[i], len = stream[i+1];
+        for (let j = 0; j < len && pos < N; j++) charIndices[pos++] = val;
+      }
     }
-    roomRef.current = code;
-    setJoining(false);
-  };
 
-  const endCall = async () => {
-    if (roomRef.current && myIdRef.current) {
-      await apiLeave(roomRef.current, myIdRef.current).catch(() => {});
-    }
-    roomRef.current = "";
-    modeRef.current = null;
-    callRef.current?.hangup();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    if (localPreRef.current)  localPreRef.current.textContent = "";
-    if (remotePreRef.current) remotePreRef.current.textContent = "";
-    setScreen("home"); setCallStatus("idle"); setRemoteHere(false);
-    setMode(null); setMyCode(""); setJoinVal(""); setFps(0); fpsT.current = [];
-    resetTemporalSmoothing();
-    setTimeout(initMgr, 300);
-  };
-
-  const copyCode = () => {
-    navigator.clipboard.writeText(myCode).catch(() => {});
-    setCopied(true); setTimeout(() => setCopied(false), 2000);
-  };
-
-  // ── HOME SCREEN ───────────────────────────────────────────────────────────
-  if (screen === "home") {
-    return (
-      <div className="call-home">
-        <div className="call-home-inner">
-          <div className="call-home-hero">
-            <div className="call-home-logo">{ }ASCII</div>
-            <div className="call-home-logo-sub">Video Call</div>
-            <p className="call-home-desc">Face-to-face in ASCII art. No account. No download.</p>
-          </div>
-
-          <div className="call-home-actions">
-            <button className="call-big-btn call-big-primary" onClick={startCall} disabled={starting}>
-              {starting
-                ? <><span className="call-btn-spinner" />Starting…</>
-                : <>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.62 3.46 2 2 0 0 1 3.59 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.96a16 16 0 0 0 6.13 6.13l.92-.92a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
-                    </svg>
-                    Start a call
-                  </>
-              }
-            </button>
-            <div className="call-home-or">or</div>
-            <div className="call-join-area">
-              <input
-                className="call-code-input"
-                placeholder="Enter code (e.g. ABCD12)"
-                value={joinVal}
-                onChange={e => setJoinVal(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
-                onKeyDown={e => e.key === "Enter" && joinVal.length > 3 && joinCall()}
-                maxLength={16}
-                spellCheck={false}
-                autoCapitalize="characters"
-              />
-              <button
-                className="call-big-btn call-big-secondary"
-                onClick={joinCall}
-                disabled={joinVal.length < 4 || joining}
-              >
-                {joining
-                  ? <><span className="call-btn-spinner" />Joining…</>
-                  : <>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                      </svg>
-                      Join
-                    </>
-                }
-              </button>
-            </div>
-          </div>
-
-          {camErr    && <p className="call-home-err">⚠ {camErr}</p>}
-          {connectErr && <p className="call-home-err">⚠ {connectErr}</p>}
-        </div>
-      </div>
-    );
-  }
-
-  // ── WAITING SCREEN — HOST view ─────────────────────────────────────────────
-  if (screen === "starting" && mode === "host") {
-    return (
-      <div className="call-waiting-screen">
-        <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
-        <video ref={videoRef} playsInline muted style={{ display: "none" }} />
-
-        <div className="call-wait-top" ref={localAreaRef}>
-          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ fontSize: "8px", lineHeight: "1.1" }} />
-          {camErr && <div className="call-cam-err">⚠ {camErr}</div>}
-        </div>
-
-        <div className="call-wait-bottom">
-          <p className="call-wait-label">Your call code — share it</p>
-          <div className="call-code-display">
-            {myCode.split("").map((ch, i) => (
-              <span key={i} className="call-code-char">{ch}</span>
-            ))}
-          </div>
-          <button className="call-copy-btn" onClick={copyCode}>
-            {copied ? "✓ Copied!" : "Copy code"}
-          </button>
-          <p className="call-wait-hint">Waiting for the other person to join…</p>
-
-          {callStatus === "connecting" && (
-            <p className="call-connecting-msg"><span className="call-btn-spinner" />Connecting…</p>
-          )}
-          {connectErr && <p className="call-home-err">⚠ {connectErr}</p>}
-
-          <button className="call-cancel-btn" onClick={endCall}>← Back</button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── WAITING SCREEN — GUEST view ───────────────────────────────────────────
-  if (screen === "starting" && mode === "guest") {
-    return (
-      <div className="call-waiting-screen">
-        <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
-        <video ref={videoRef} playsInline muted style={{ display: "none" }} />
-
-        <div className="call-wait-top" ref={localAreaRef}>
-          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ fontSize: "8px", lineHeight: "1.1" }} />
-          {camErr && <div className="call-cam-err">⚠ {camErr}</div>}
-        </div>
-
-        <div className="call-wait-bottom">
-          {callStatus === "connecting"
-            ? <p className="call-connecting-msg"><span className="call-btn-spinner" />Connecting…</p>
-            : <p className="call-wait-hint">Establishing connection…</p>
-          }
-          {connectErr && (
-            <>
-              <p className="call-home-err">⚠ {connectErr}</p>
-              <div className="call-join-inline">
-                <input
-                  className="call-code-input"
-                  placeholder="Re-enter code"
-                  value={joinVal}
-                  onChange={e => setJoinVal(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
-                  onKeyDown={e => e.key === "Enter" && joinVal.length > 3 && joinCall()}
-                  maxLength={16}
-                  autoCapitalize="characters"
-                  spellCheck={false}
-                />
-                <button
-                  className="call-big-btn call-big-secondary call-big-sm"
-                  onClick={joinCall}
-                  disabled={joinVal.length < 4 || joining}
-                >
-                  {joining ? "…" : "Retry"}
-                </button>
-              </div>
-            </>
-          )}
-          <button className="call-cancel-btn" onClick={endCall}>← Back</button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── IN-CALL SCREEN ────────────────────────────────────────────────────────
-  return (
-    <div className="call-active">
-      <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
-      <video ref={videoRef} playsInline muted style={{ display: "none" }} />
-
-      <div className="call-panels">
-        <div className="call-panel call-panel-remote">
-          <span className="call-panel-tag">Peer</span>
-          {!remoteHere && (
-            <div className="call-panel-waiting">
-              <div className="call-panel-waiting-icon">◌</div>
-              <p>Waiting for peer video…</p>
-            </div>
-          )}
-          <pre
-            ref={remotePreRef}
-            className="ascii-output call-pre-fill"
-            style={{ fontSize: "8px", lineHeight: "1.1", display: remoteHere ? undefined : "none" }}
-          />
-        </div>
-
-        <div ref={localAreaRef} className="call-panel call-panel-local">
-          <span className="call-panel-tag">
-            You {fps > 0 && <span className="call-fps-tag">{fps}fps</span>}
-          </span>
-          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ fontSize: "8px", lineHeight: "1.1" }} />
-        </div>
-      </div>
-
-      <div className="call-bar">
-        <button
-          className={`call-circle-btn${muted ? " call-circle-danger" : ""}`}
-          onClick={toggleMic}
-          title={muted ? "Unmute" : "Mute"}
-        >
-          <span className="call-circle-icon">
-            {muted
-              ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-              : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            }
-          </span>
-          <span className="call-circle-label">{muted ? "Unmute" : "Mic"}</span>
-        </button>
-
-        <button
-          className={`call-circle-btn${camOff ? " call-circle-danger" : ""}`}
-          onClick={toggleCam}
-          title={camOff ? "Camera off" : "Camera on"}
-        >
-          <span className="call-circle-icon">
-            {camOff
-              ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34"/><path d="M15.54 15.54A3 3 0 0 1 9 12a3 3 0 0 1 .46-1.54"/></svg>
-              : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-            }
-          </span>
-          <span className="call-circle-label">{camOff ? "Off" : "Camera"}</span>
-        </button>
-
-        <button
-          className={`call-circle-btn${colorMode ? " call-circle-active" : ""}`}
-          onClick={() => setColorMode(m => !m)}
-          title="Toggle color"
-        >
-          <span className="call-circle-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="13.5" cy="6.5" r="2.5" fill="currentColor" opacity=".5"/>
-              <circle cx="17.5" cy="10.5" r="2.5" fill="currentColor" opacity=".5"/>
-              <circle cx="8.5" cy="7" r="2.5" fill="currentColor" opacity=".5"/>
-              <circle cx="6.5" cy="12" r="2.5" fill="currentColor" opacity=".5"/>
-              <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-            </svg>
-          </span>
-          <span className="call-circle-label">Color</span>
-        </button>
-
-        <button className="call-circle-btn" onClick={flipCam} title="Flip camera">
-          <span className="call-circle-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M1 4v6h6"/><path d="M23 20v-6h-6"/>
-              <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
-            </svg>
-          </span>
-          <span className="call-circle-label">Flip</span>
-        </button>
-
-        <button className="call-circle-btn call-circle-end" onClick={endCall} title="End call">
-          <span className="call-circle-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.62 3.46 2 2 0 0 1 3.59 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.96a16 16 0 0 0 6.13 6.13l.92-.92a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
-              <line x1="4" y1="4" x2="20" y2="20"/>
-            </svg>
-          </span>
-          <span className="call-circle-label">End</span>
-        </button>
-      </div>
-    </div>
-  );
+    let colors: Uint8Array | undefined;
+    if (hasColor) colors = new Uint8Array(buf.slice(streamEnd, streamEnd + N * 3));
+    return { w, h, charset, charIndices, colors };
+  } catch { return null; }
 }
 
-    
+export class CallManager {
+  private peer: Peer | null = null;
+  private dataConn: DataConnection | null = null;
+  private mediaConn: MediaConnection | null = null;
+  private pendingCall: MediaConnection | null = null;
+  private events: CallManagerEvents;
+  private localStream: MediaStream | null = null;
+  private prevSentIndices: Uint16Array | null = null;
+  private prevRecvFrame: RemoteFrame | null = null;
+  private frameCount = 0;
+  private keyframeInterval = 30;
+  private lastSentAt = 0;
+  private targetFps = 30;
+
+  constructor(events: CallManagerEvents) { this.events = events; }
+
+  setLocalStream(stream: MediaStream) { this.localStream = stream; }
+
+  async start(): Promise<string> {
+    return new Promise((resolve, reject) => {
+      // Use PeerJS cloud (free, no account needed)
+      const peer = new Peer({
+        config: { iceServers: ICE_SERVERS },
+        // debug: 1, // uncomment to see connection logs
+      });
+      this.peer = peer;
+
+      peer.on("open", id => {
+        this.events.onStatus("waiting", id);
+        resolve(id);
+      });
+
+      peer.on("connection", conn => this.attachData(conn));
+
+      peer.on("call", call => {
+        this.mediaConn = call;
+        this.pendingCall = call;
+        if (this.localStream) this.answerWithStream(this.localStream);
+        this.events.onStatus("connected");
+      });
+
+      peer.on("error", err => {
+        this.events.onStatus("error", err.message);
+        reject(err);
+      });
+
+      peer.on("disconnected", () => {
+        // Auto-reconnect
+        setTimeout(() => { try { peer.reconnect(); } catch {} }, 2000);
+      });
+    });
+  }
+
+  answerWithStream(localStream: MediaStream) {
+    this.localStream = localStream;
+    if (this.pendingCall) {
+      this.pendingCall.answer(localStream);
+      this.pendingCall.on("stream", s => this.events.onRemoteStream(s));
+      this.pendingCall.on("close", () => this.events.onRemoteHangup());
+      this.pendingCall = null;
+    }
+  }
+
+  connectTo(remoteId: string, localStream: MediaStream | null) {
+    if (!this.peer) return;
+    this.events.onStatus("connecting", remoteId);
+    this.localStream = localStream;
+
+    // DATA channel: reliable=true so delta encoding state never diverges
+    // serialization:"none" = raw binary, no msgpack wrapping (fixes ArrayBuffer receipt)
+    const conn = this.peer.connect(remoteId.trim(), {
+      reliable: true,
+      serialization: "binary",
+    });
+    this.attachData(conn);
+
+    if (localStream) {
+      const call = this.peer.call(remoteId.trim(), localStream);
+      this.mediaConn = call;
+      call.on("stream", s => this.events.onRemoteStream(s));
+      call.on("close", () => this.events.onRemoteHangup());
+    }
+  }
+
+  private attachData(conn: DataConnection) {
+    this.dataConn = conn;
+
+    conn.on("open", () => {
+      this.events.onStatus("connected");
+    });
+
+    conn.on("data", (data: unknown) => {
+      const buf = toArrayBuffer(data);
+      if (buf) {
+        const frame = decode(buf, this.prevRecvFrame);
+        if (frame) { this.prevRecvFrame = frame; this.events.onRemoteFrame(frame); }
+      } else if (data instanceof Blob) {
+        // Handle Blob asynchronously (some browsers)
+        data.arrayBuffer().then(ab => {
+          const frame = decode(ab, this.prevRecvFrame);
+          if (frame) { this.prevRecvFrame = frame; this.events.onRemoteFrame(frame); }
+        }).catch(() => {});
+      }
+    });
+
+    conn.on("close",  () => { this.events.onStatus("closed"); });
+    conn.on("error", err => { this.events.onStatus("error", err.message); });
+  }
+
+  sendFrame(
+    charIndices: Uint16Array, w: number, h: number,
+    charset: string, colors: Uint8Array | null
+  ) {
+    if (!this.dataConn?.open) return;
+    const now = performance.now();
+    if (now - this.lastSentAt < 1000 / this.targetFps) return;
+    this.lastSentAt = now;
+    this.frameCount++;
+    const isKey = this.frameCount % this.keyframeInterval === 1;
+    const prev = isKey ? null : this.prevSentIndices;
+    const buf = encode(charIndices, w, h, charset, colors, prev);
+    try {
+      this.dataConn.send(buf);
+      if (!isKey && this.prevSentIndices?.length === charIndices.length) {
+        this.prevSentIndices.set(charIndices);
+      } else {
+        this.prevSentIndices = new Uint16Array(charIndices);
+      }
+    } catch { /* channel congested — drop frame */ }
+  }
+
+  hangup() {
+    this.frameCount = 0; this.prevSentIndices = null; this.prevRecvFrame = null;
+    try { this.dataConn?.close(); } catch {}
+    try { this.mediaConn?.close(); } catch {}
+    try { this.peer?.destroy(); } catch {}
+    this.dataConn = null; this.mediaConn = null; this.peer = null;
+  }
+
+  setTargetFps(fps: number) { this.targetFps = fps; }
+  get isConnected() { return !!this.dataConn?.open; }
+}
