@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { processFrame, frameToHtml, resetTemporalSmoothing, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
+import { processFrame, frameToHtml, renderToString, resetTemporalSmoothing, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
 import { saveLibraryItem, makeThumbnail, genId } from "../lib/library";
 import { exportGif, exportMp4, exportPng, exportJpeg, framesToText } from "../lib/export";
 import { makeFilename, triggerDownload, getExportBg } from "../types";
@@ -84,15 +84,24 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       rafRef.current = requestAnimationFrame(renderLoop);
       return;
     }
-    const frame = processFrame(video, offscreen.current, {
+    // Use renderToString fast path for live preview — zero object allocation
+    const result = renderToString(video, offscreen.current, {
       ...optsRef.current,
       asciiW: fitRef.current.cols,
       asciiH: fitRef.current.rows,
-    }, true);
-    if (frame) {
-      lastFrameRef.current = frame;
-      pre.innerHTML = frameToHtml(frame, optsRef.current.color);
-      if (stageRef.current === "recording") {
+    }, true, "html");
+    // Still need processFrame for recording (stores AsciiFrame for export)
+    const frame = stageRef.current === "recording"
+      ? processFrame(video, offscreen.current, { ...optsRef.current, asciiW: fitRef.current.cols, asciiH: fitRef.current.rows }, true)
+      : null;
+    if (result) {
+      if (frame) lastFrameRef.current = frame;
+      else if (!lastFrameRef.current) {
+        // capture path: need a frame for export
+      }
+      const { html, isColor } = result;
+      if (isColor) pre.innerHTML = html; else pre.textContent = html;
+      if (stageRef.current === "recording" && frame) {
         recordedRef.current.push(frame);
         setRecCount(c => c + 1);
       }
@@ -104,6 +113,9 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
         setFps(f);
         liveFpsRef.current = f || 15;
       }
+    } else if (result) {
+      const { html, isColor } = result;
+      if (isColor) pre.innerHTML = html; else pre.textContent = html;
     }
     rafRef.current = requestAnimationFrame(renderLoop);
   }, []);
