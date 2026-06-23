@@ -98,7 +98,7 @@ export default function CallTab({ opts, updateOpt }: Props) {
   const streamRef      = useRef<MediaStream | null>(null);
   const callRef        = useRef<CallManager | null>(null);
   const optsRef        = useRef(opts);
-  const fitRef         = useRef({ cols: 60, rows: 34 });
+  const fitRef         = useRef({ cols: 90, rows: 64 });
   const fsRef          = useRef(10);
   const myIdRef        = useRef("");
   const roomRef        = useRef("");
@@ -427,14 +427,14 @@ export default function CallTab({ opts, updateOpt }: Props) {
           <span className="call-panel-tag">Peer</span>
           {!remoteHere && (
             <div className="call-panel-waiting">
-              <div className="call-panel-waiting-icon">◌</div>
+              <div className="call-panel-waiting-icon">...</div>
               <p>Waiting for peer video…</p>
             </div>
           )}
           <pre
             ref={remotePreRef}
             className="ascii-output call-pre-fill"
-            style={{ fontSize: "8px", lineHeight: "1.1", display: remoteHere ? undefined : "none" }}
+            style={{ fontSize: "6px", lineHeight: "1.1", display: remoteHere ? undefined : "none" }}
           />
         </div>
 
