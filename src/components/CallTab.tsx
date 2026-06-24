@@ -604,7 +604,20 @@ export default function CallTab({ opts, updateOpt }: Props) {
           <span className="call-circle-label">Color</span>
         </button>
 
-        {/* Flip */}
+        <button
+          className={`call-circle-btn${expandedPanel === "remote" ? " call-circle-active" : ""}`}
+          onClick={() => setExpandedPanel(p => p === "remote" ? null : "remote")}
+          title="Expand peer view"
+        >
+          <span className="call-circle-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="18" rx="2"/><line x1="2" y1="12" x2="22" y2="12"/>
+              <path d="M8 3v9m4-4l-4 4-4-4"/>
+            </svg>
+          </span>
+          <span className="call-circle-label">Peer</span>
+        </button>
+
         <button className="call-circle-btn" onClick={flipCam} title="Flip camera">
           <span className="call-circle-icon">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -615,18 +628,6 @@ export default function CallTab({ opts, updateOpt }: Props) {
           <span className="call-circle-label">Flip</span>
         </button>
 
-        {/* Fullscreen */}
-        <button className="call-circle-btn" onClick={toggleFullscreen} title="Fullscreen">
-          <span className="call-circle-icon">
-            {fullscreen
-              ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
-              : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-            }
-          </span>
-          <span className="call-circle-label">{fullscreen ? "Exit" : "Full"}</span>
-        </button>
-
-        {/* Fullscreen */}
         <button className="call-circle-btn" onClick={toggleFullscreen} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
           <span className="call-circle-icon">
             {fullscreen
