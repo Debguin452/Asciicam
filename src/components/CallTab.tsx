@@ -155,12 +155,14 @@ export default function CallTab({ opts, updateOpt }: Props) {
   const localPreRef   = useRef<HTMLPreElement>(null);
   const remotePreRef  = useRef<HTMLPreElement>(null);
   const localAreaRef  = useRef<HTMLDivElement>(null);
+  const remoteAreaRef = useRef<HTMLDivElement>(null);
   const callScreenRef = useRef<HTMLDivElement>(null);
+  const callFsRef     = useRef(6); // auto-computed font size for call panels
   const rafRef        = useRef(0);
   const streamRef     = useRef<MediaStream | null>(null);
   const callRef       = useRef<CallManager | null>(null);
   const optsRef       = useRef(opts);
-  const fitRef        = useRef({ cols: 75, rows: 49 });
+  const fitRef        = useRef({ cols: 60, rows: 34 });
   const fsRef         = useRef(10);
   const myIdRef       = useRef("");
   const roomRef       = useRef("");
@@ -183,6 +185,7 @@ export default function CallTab({ opts, updateOpt }: Props) {
   const [joining,     setJoining]     = useState(false);
   const [starting,    setStarting]    = useState(false);
   const [fullscreen,  setFullscreen]  = useState(false);
+  const [expandedPanel, setExpandedPanel] = useState<"local"|"remote"|null>(null);
 
   const colorModeRef = useRef(colorMode);
   const facingRef    = useRef(facing);
@@ -197,19 +200,34 @@ export default function CallTab({ opts, updateOpt }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-fit: compute font size so the fixed 60×34 grid fills the local panel exactly
+  const updateCallFontSize = useCallback(() => {
+    const el = localAreaRef.current; if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    if (!width || !height) return;
+    // Solve: cols = floor(w / (fs * 0.575)) >= 60 → fs_max = w / (60 * 0.575)
+    //        rows = floor(h / (fs * 1.15))  >= 34 → fs_max = h / (34 * 1.15)
+    const fsByW = width  / (60 * 0.575);
+    const fsByH = height / (34 * 1.15);
+    const fs = Math.max(2, Math.floor(Math.min(fsByW, fsByH)));
+    callFsRef.current = fs;
+    // Update grid to match exactly
+    fitRef.current = {
+      cols: Math.max(10, Math.floor(width  / (fs * 0.575))),
+      rows: Math.max(5,  Math.floor(height / (fs * 1.15))),
+    };
+    // Apply to both pre elements
+    if (localPreRef.current)  { localPreRef.current.style.fontSize  = fs + "px"; localPreRef.current.style.lineHeight  = "1.1"; }
+    if (remotePreRef.current) { remotePreRef.current.style.fontSize = fs + "px"; remotePreRef.current.style.lineHeight = "1.1"; }
+  }, []);
+
   useEffect(() => {
     const el = localAreaRef.current; if (!el) return;
-    const obs = new ResizeObserver(([e]) => {
-      const { width, height } = e.contentRect;
-      const fs = fsRef.current;
-      if (width && height) fitRef.current = {
-        cols: Math.max(10, Math.floor(width  / (fs * 0.575))),
-        rows: Math.max(5,  Math.floor(height / (fs * 1.15))),
-      };
-    });
+    const obs = new ResizeObserver(updateCallFontSize);
     obs.observe(el);
+    updateCallFontSize();
     return () => obs.disconnect();
-  }, []);
+  }, [updateCallFontSize]);
 
   // Fullscreen listener
   useEffect(() => {
@@ -402,6 +420,7 @@ export default function CallTab({ opts, updateOpt }: Props) {
     if (remotePreRef.current) remotePreRef.current.textContent = "";
     setScreen("home"); setCallStatus("idle"); setRemoteHere(false);
     setMode(null); setMyCode(""); setJoinVal(""); setFps(0); fpsT.current = [];
+    setExpandedPanel(null);
     resetTemporalSmoothing();
     setTimeout(initMgr, 300);
   };
@@ -460,7 +479,7 @@ export default function CallTab({ opts, updateOpt }: Props) {
         <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
         <video ref={videoRef} playsInline muted style={{ display: "none" }} />
         <div className="call-wait-top" ref={localAreaRef}>
-          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ fontSize: "8px", lineHeight: "1.1" }} />
+          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ lineHeight: "1.1" }} />
           {camErr && <div className="call-cam-err">⚠ {camErr}</div>}
         </div>
         <div className="call-wait-bottom">
@@ -485,7 +504,7 @@ export default function CallTab({ opts, updateOpt }: Props) {
         <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
         <video ref={videoRef} playsInline muted style={{ display: "none" }} />
         <div className="call-wait-top" ref={localAreaRef}>
-          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ fontSize: "8px", lineHeight: "1.1" }} />
+          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ lineHeight: "1.1" }} />
           {camErr && <div className="call-cam-err">⚠ {camErr}</div>}
         </div>
         <div className="call-wait-bottom">
@@ -519,9 +538,13 @@ export default function CallTab({ opts, updateOpt }: Props) {
       <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
       <video ref={videoRef} playsInline muted style={{ display: "none" }} />
 
-      <div className="call-panels">
-        <div className="call-panel call-panel-remote">
-          <span className="call-panel-tag">Peer</span>
+      <div className={`call-panels${expandedPanel ? " call-panels-expanded" : ""}`}>
+        <div
+          ref={remoteAreaRef}
+          className={`call-panel call-panel-remote${expandedPanel === "remote" ? " call-panel-solo" : expandedPanel === "local" ? " call-panel-hidden" : ""}`}
+          onClick={() => setExpandedPanel(p => p === "remote" ? null : "remote")}
+        >
+          <span className="call-panel-tag">Peer {expandedPanel === "remote" && <span className="call-panel-expand-hint">tap to restore</span>}</span>
           {!remoteHere && (
             <div className="call-panel-waiting">
               <div className="call-panel-waiting-icon">◌</div>
@@ -529,14 +552,19 @@ export default function CallTab({ opts, updateOpt }: Props) {
             </div>
           )}
           <pre ref={remotePreRef} className="ascii-output call-pre-fill"
-            style={{ fontSize: "6px", lineHeight: "1.1", display: remoteHere ? undefined : "none" }} />
+            style={{ display: remoteHere ? undefined : "none" }} />
         </div>
 
-        <div ref={localAreaRef} className="call-panel call-panel-local">
+        <div
+          ref={localAreaRef}
+          className={`call-panel call-panel-local${expandedPanel === "local" ? " call-panel-solo" : expandedPanel === "remote" ? " call-panel-hidden" : ""}`}
+          onClick={() => setExpandedPanel(p => p === "local" ? null : "local")}
+        >
           <span className="call-panel-tag">
             You {fps > 0 && <span className="call-fps-tag">{fps}fps</span>}
+            {expandedPanel === "local" && <span className="call-panel-expand-hint">tap to restore</span>}
           </span>
-          <pre ref={localPreRef} className="ascii-output call-pre-fill" style={{ fontSize: "8px", lineHeight: "1.1" }} />
+          <pre ref={localPreRef} className="ascii-output call-pre-fill" />
         </div>
       </div>
 
@@ -589,6 +617,17 @@ export default function CallTab({ opts, updateOpt }: Props) {
 
         {/* Fullscreen */}
         <button className="call-circle-btn" onClick={toggleFullscreen} title="Fullscreen">
+          <span className="call-circle-icon">
+            {fullscreen
+              ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+              : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            }
+          </span>
+          <span className="call-circle-label">{fullscreen ? "Exit" : "Full"}</span>
+        </button>
+
+        {/* Fullscreen */}
+        <button className="call-circle-btn" onClick={toggleFullscreen} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
           <span className="call-circle-icon">
             {fullscreen
               ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>

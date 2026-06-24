@@ -19,63 +19,62 @@ interface Props {
 type Stage = "idle" | "live" | "recording" | "choosing" | "exporting";
 
 export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated, exportFg, onExportFgChange }: Props) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const offscreen = useRef(document.createElement("canvas"));
-  const preRef = useRef<HTMLPreElement>(null);
-  const areaRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef(0);
-  const streamRef = useRef<MediaStream | null>(null);
-  const optsRef = useRef(opts);
-  const recordedRef = useRef<AsciiFrame[]>([]);
-  const liveFpsRef = useRef(15);
-  const fpsTimesRef = useRef<number[]>([]);
-  const lastFrameRef = useRef<AsciiFrame | null>(null);
-  const stageRef = useRef<Stage>("idle");
-  const fitRef = useRef({ cols: 140, rows: 80 });
-  const fontSizeRef = useRef(fontSize);
-  const colorInputRef = useRef<HTMLInputElement>(null);
+  const videoRef       = useRef<HTMLVideoElement>(null);
+  const offscreen      = useRef(document.createElement("canvas"));
+  const preRef         = useRef<HTMLPreElement>(null);
+  const areaRef        = useRef<HTMLDivElement>(null);
+  const rafRef         = useRef(0);
+  const streamRef      = useRef<MediaStream | null>(null);
+  const optsRef        = useRef(opts);
+  const recordedRef    = useRef<AsciiFrame[]>([]);
+  const liveFpsRef     = useRef(15);
+  const fpsTimesRef    = useRef<number[]>([]);
+  const lastFrameRef   = useRef<AsciiFrame | null>(null);
+  const stageRef       = useRef<Stage>("idle");
+  const fitRef         = useRef({ cols: 140, rows: 80 });
+  const fontSizeRef    = useRef(fontSize);
+  const colorInputRef  = useRef<HTMLInputElement>(null);
 
-  const [stage, setStageState] = useState<Stage>("idle");
+  const [stage, setStageState]     = useState<Stage>("idle");
   const [capturedCount, setCapturedCount] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [fps, setFps] = useState(0);
-  const [recCount, setRecCount] = useState(0);
-  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 720);
+  const [error, setError]          = useState<string | null>(null);
+  const [fps, setFps]              = useState(0);
+  const [recCount, setRecCount]    = useState(0);
+  const [panelOpen, setPanelOpen]  = useState(() => window.innerWidth > 720);
   const [exportStatus, setExportStatus] = useState("");
-  const [isMobile] = useState(() => window.innerWidth <= 720);
+  const [isMobile]                 = useState(() => window.innerWidth <= 720);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const setStage = (s: Stage) => { stageRef.current = s; setStageState(s); };
 
   useEffect(() => { optsRef.current = opts; }, [opts]);
 
-  // Auto-size the ASCII grid to fill the ascii-area exactly
-  useEffect(() => {
-    fontSizeRef.current = fontSize;
+  const updateFit = useCallback(() => {
     const area = areaRef.current;
     if (!area) return;
     const { width, height } = area.getBoundingClientRect();
     if (!width || !height) return;
+    // Font size only affects visual text size, NOT grid dimensions.
+    // Use a fixed base cell size so cols/rows stay stable regardless of fontSize.
+    const BASE_FS = 10;
     fitRef.current = {
-      cols: Math.max(10, Math.floor(width  / (fontSize * 0.575))),
-      rows: Math.max(5,  Math.floor(height / (fontSize * 1.15))),
+      cols: Math.max(10, Math.floor(width  / (BASE_FS * 0.575))),
+      rows: Math.max(5,  Math.floor(height / (BASE_FS * 1.15))),
     };
+  }, []);
+
+  useEffect(() => {
+    fontSizeRef.current = fontSize;
+    // Do NOT call updateFit here — fontSize only changes px size of rendered text
   }, [fontSize]);
 
   useEffect(() => {
     const area = areaRef.current;
     if (!area) return;
-    const obs = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
-      if (!width || !height) return;
-      const fs = fontSizeRef.current;
-      fitRef.current = {
-        cols: Math.max(10, Math.floor(width  / (fs * 0.575))),
-        rows: Math.max(5,  Math.floor(height / (fs * 1.15))),
-      };
-    });
+    const obs = new ResizeObserver(updateFit);
     obs.observe(area);
     return () => obs.disconnect();
-  }, []);
+  }, [updateFit]);
 
   const renderLoop = useCallback(() => {
     const video = videoRef.current;
@@ -84,21 +83,16 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       rafRef.current = requestAnimationFrame(renderLoop);
       return;
     }
-    // Use renderToString fast path for live preview — zero object allocation
     const result = renderToString(video, offscreen.current, {
       ...optsRef.current,
       asciiW: fitRef.current.cols,
       asciiH: fitRef.current.rows,
     }, true, "html");
-    // Still need processFrame for recording (stores AsciiFrame for export)
     const frame = stageRef.current === "recording"
       ? processFrame(video, offscreen.current, { ...optsRef.current, asciiW: fitRef.current.cols, asciiH: fitRef.current.rows }, true)
       : null;
     if (result) {
       if (frame) lastFrameRef.current = frame;
-      else if (!lastFrameRef.current) {
-        // capture path: need a frame for export
-      }
       const { html, isColor } = result;
       if (isColor) pre.innerHTML = html; else pre.textContent = html;
       if (stageRef.current === "recording" && frame) {
@@ -113,9 +107,6 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
         setFps(f);
         liveFpsRef.current = f || 15;
       }
-    } else if (result) {
-      const { html, isColor } = result;
-      if (isColor) pre.innerHTML = html; else pre.textContent = html;
     }
     rafRef.current = requestAnimationFrame(renderLoop);
   }, []);
@@ -129,6 +120,22 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
 
   useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
 
+  // Fullscreen change listener
+  useEffect(() => {
+    const onChange = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = areaRef.current;
+    if (!document.fullscreenElement && el) {
+      el.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -137,10 +144,12 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       if (e.code === "KeyR" && s === "live") startRecording();
       if (e.code === "KeyR" && s === "recording") stopAndChoose();
       if (e.code === "KeyC" && (s === "live" || s === "recording")) captureFrame();
+      if (e.code === "KeyF") toggleFullscreen();
       if (e.code === "Escape") setPanelOpen(false);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const stopStream = () => {
@@ -290,9 +299,17 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
             </>
           )}
           {(stage === "live" || stage === "recording") && (
-            <button className="btn btn-ghost" onClick={() => setPanelOpen(o => !o)}>
-              Controls {panelOpen ? "▲" : "▼"}
-            </button>
+            <>
+              <button className="btn btn-ghost" onClick={toggleFullscreen} title="Fullscreen (F)">
+                {fullscreen
+                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+                  : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                }
+              </button>
+              <button className="btn btn-ghost" onClick={() => setPanelOpen(o => !o)}>
+                Controls {panelOpen ? "▲" : "▼"}
+              </button>
+            </>
           )}
           <input ref={colorInputRef} type="color" value={exportFg} onChange={e => onExportFgChange(e.target.value)}
             style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }} tabIndex={-1} />
@@ -311,11 +328,16 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
               <p className="splash-hint">Works offline after first load</p>
               {error && <p className="badge badge-err" style={{ marginTop: 8 }}>⚠ {error}</p>}
               <p className="splash-hint" style={{ marginTop: 8, fontSize: 10 }}>
-                Space · start/stop &nbsp; R · record &nbsp; C · capture &nbsp; Esc · close panel
+                Space · start/stop &nbsp; R · record &nbsp; C · capture &nbsp; F · fullscreen &nbsp; Esc · close panel
               </p>
             </div>
           )}
-          <pre ref={preRef} className="ascii-output" style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }} />
+          {/* position:absolute so the pre never shifts the layout */}
+          <pre
+            ref={preRef}
+            className="ascii-output ascii-output-fill"
+            style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }}
+          />
         </div>
         {panelOpen && (stage === "live" || stage === "recording") && (
           <div className="controls-panel-wrap">
@@ -338,6 +360,9 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
               <button className="cam-record-btn recording" onClick={stopAndChoose} title="Stop">■</button>
             </>
           )}
+          <button className="cam-side-btn" onClick={toggleFullscreen} title="Fullscreen">
+            {fullscreen ? "⊡" : "⛶"}
+          </button>
           <button className="cam-side-btn" onClick={() => setPanelOpen(o => !o)} title="Controls">⚙</button>
         </div>
       )}
