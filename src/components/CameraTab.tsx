@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { processFrame, frameToHtml, renderToString, resetTemporalSmoothing, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
+import { processFrame, renderToString, resetTemporalSmoothing, type AsciiOptions, type AsciiFrame } from "../lib/ascii";
 import { saveLibraryItem, makeThumbnail, genId } from "../lib/library";
 import { exportGif, exportMp4, exportPng, exportJpeg, framesToText } from "../lib/export";
 import { makeFilename, triggerDownload, getExportBg } from "../types";
@@ -19,31 +19,31 @@ interface Props {
 type Stage = "idle" | "live" | "recording" | "choosing" | "exporting";
 
 export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated, exportFg, onExportFgChange }: Props) {
-  const videoRef       = useRef<HTMLVideoElement>(null);
-  const offscreen      = useRef(document.createElement("canvas"));
-  const preRef         = useRef<HTMLPreElement>(null);
-  const areaRef        = useRef<HTMLDivElement>(null);
-  const rafRef         = useRef(0);
-  const streamRef      = useRef<MediaStream | null>(null);
-  const optsRef        = useRef(opts);
-  const recordedRef    = useRef<AsciiFrame[]>([]);
-  const liveFpsRef     = useRef(15);
-  const fpsTimesRef    = useRef<number[]>([]);
-  const lastFrameRef   = useRef<AsciiFrame | null>(null);
-  const stageRef       = useRef<Stage>("idle");
-  const fitRef         = useRef({ cols: 140, rows: 80 });
-  const fontSizeRef    = useRef(fontSize);
-  const colorInputRef  = useRef<HTMLInputElement>(null);
+  const videoRef      = useRef<HTMLVideoElement>(null);
+  const offscreen     = useRef(document.createElement("canvas"));
+  const preRef        = useRef<HTMLPreElement>(null);
+  const areaRef       = useRef<HTMLDivElement>(null);
+  const rafRef        = useRef(0);
+  const streamRef     = useRef<MediaStream | null>(null);
+  const optsRef       = useRef(opts);
+  const recordedRef   = useRef<AsciiFrame[]>([]);
+  const liveFpsRef    = useRef(15);
+  const fpsTimesRef   = useRef<number[]>([]);
+  const lastFrameRef  = useRef<AsciiFrame | null>(null);
+  const stageRef      = useRef<Stage>("idle");
+  const fitRef        = useRef({ cols: 140, rows: 80 });
+  const fontSizeRef   = useRef(fontSize);
+  const colorInputRef = useRef<HTMLInputElement>(null);
 
-  const [stage, setStageState]     = useState<Stage>("idle");
+  const [stage, setStageState]          = useState<Stage>("idle");
   const [capturedCount, setCapturedCount] = useState(0);
-  const [error, setError]          = useState<string | null>(null);
-  const [fps, setFps]              = useState(0);
-  const [recCount, setRecCount]    = useState(0);
-  const [panelOpen, setPanelOpen]  = useState(() => window.innerWidth > 720);
+  const [error, setError]               = useState<string | null>(null);
+  const [fps, setFps]                   = useState(0);
+  const [recCount, setRecCount]         = useState(0);
+  const [panelOpen, setPanelOpen]       = useState(() => window.innerWidth > 720);
   const [exportStatus, setExportStatus] = useState("");
-  const [isMobile]                 = useState(() => window.innerWidth <= 720);
-  const [fullscreen, setFullscreen] = useState(false);
+  const [isMobile]                      = useState(() => window.innerWidth <= 720);
+  const [fullscreen, setFullscreen]     = useState(false);
 
   const setStage = (s: Stage) => { stageRef.current = s; setStageState(s); };
 
@@ -54,8 +54,6 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     if (!area) return;
     const { width, height } = area.getBoundingClientRect();
     if (!width || !height) return;
-    // Font size only affects visual text size, NOT grid dimensions.
-    // Use a fixed base cell size so cols/rows stay stable regardless of fontSize.
     const BASE_FS = 10;
     fitRef.current = {
       cols: Math.max(10, Math.floor(width  / (BASE_FS * 0.575))),
@@ -63,16 +61,14 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     };
   }, []);
 
-  useEffect(() => {
-    fontSizeRef.current = fontSize;
-    // Do NOT call updateFit here — fontSize only changes px size of rendered text
-  }, [fontSize]);
+  useEffect(() => { fontSizeRef.current = fontSize; }, [fontSize]);
 
   useEffect(() => {
     const area = areaRef.current;
     if (!area) return;
     const obs = new ResizeObserver(updateFit);
     obs.observe(area);
+    updateFit();
     return () => obs.disconnect();
   }, [updateFit]);
 
@@ -112,15 +108,12 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   }, []);
 
   useEffect(() => {
-    if (stage === "live" || stage === "recording") {
-      rafRef.current = requestAnimationFrame(renderLoop);
-    }
+    if (stage === "live" || stage === "recording") rafRef.current = requestAnimationFrame(renderLoop);
     return () => cancelAnimationFrame(rafRef.current);
   }, [stage, renderLoop]);
 
   useEffect(() => () => { streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
 
-  // Fullscreen change listener
   useEffect(() => {
     const onChange = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onChange);
@@ -129,19 +122,16 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
 
   const toggleFullscreen = () => {
     const el = areaRef.current;
-    if (!document.fullscreenElement && el) {
-      el.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
-    }
+    if (!document.fullscreenElement && el) el.requestFullscreen().catch(() => {});
+    else document.exitFullscreen().catch(() => {});
   };
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
       const s = stageRef.current;
-      if (e.code === "Space") { e.preventDefault(); if (s === "idle") startCamera(); else if (s === "live" || s === "recording") stopAndChoose(); }
-      if (e.code === "KeyR" && s === "live") startRecording();
+      if (e.code === "Space")  { e.preventDefault(); if (s === "idle") startCamera(); else if (s === "live" || s === "recording") stopAndChoose(); }
+      if (e.code === "KeyR" && s === "live")      startRecording();
       if (e.code === "KeyR" && s === "recording") stopAndChoose();
       if (e.code === "KeyC" && (s === "live" || s === "recording")) captureFrame();
       if (e.code === "KeyF") toggleFullscreen();
@@ -182,11 +172,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     resetTemporalSmoothing();
   };
 
-  const startRecording = () => {
-    recordedRef.current = [];
-    setRecCount(0);
-    setStage("recording");
-  };
+  const startRecording = () => { recordedRef.current = []; setRecCount(0); setStage("recording"); };
 
   const captureFrame = () => {
     stopStream();
@@ -241,7 +227,6 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
       setRecCount(0); setCapturedCount(0);
       if (preRef.current) preRef.current.innerHTML = "";
     } catch (err) {
-      console.error(err);
       setExportStatus("Export failed — " + (err instanceof Error ? err.message : "unknown"));
       setTimeout(() => setStage("choosing"), 2000);
     }
@@ -268,6 +253,10 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
 
   const isMulti = capturedCount > 1;
 
+  const SvgFullscreen = fullscreen
+    ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+    : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>;
+
   return (
     <div className="tab-content">
       <video ref={videoRef} style={{ display: "none" }} playsInline muted />
@@ -277,8 +266,8 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
           {(stage === "live" || stage === "recording") && (
             <span className={`badge${fps < 8 ? " badge-warn" : ""}`}>{fps} fps</span>
           )}
-          {stage === "recording" && <span className="badge badge-rec">● REC {recCount}f</span>}
-          {error && <span className="badge badge-err">⚠ {error}</span>}
+          {stage === "recording" && <span className="badge badge-rec">REC {recCount}f</span>}
+          {error && <span className="badge badge-err">{error}</span>}
         </div>
         <div className="toolbar-right">
           {stage === "idle" && (
@@ -288,27 +277,20 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
             <>
               <button className="btn btn-ghost" onClick={() => navigator.clipboard.writeText(preRef.current?.innerText ?? "")}>Copy</button>
               <button className="btn btn-ghost" onClick={captureFrame}>Capture</button>
-              <button className="btn btn-primary" onClick={startRecording}>● Record</button>
+              <button className="btn btn-primary" onClick={startRecording}>Record</button>
               <button className="btn btn-ghost" onClick={stopCamera}>Stop</button>
             </>
           )}
           {stage === "recording" && (
             <>
-              <button className="btn btn-danger" onClick={stopAndChoose}>■ Stop</button>
+              <button className="btn btn-danger" onClick={stopAndChoose}>Stop</button>
               <button className="btn btn-ghost" onClick={discard}>Discard</button>
             </>
           )}
           {(stage === "live" || stage === "recording") && (
             <>
-              <button className="btn btn-ghost" onClick={toggleFullscreen} title="Fullscreen (F)">
-                {fullscreen
-                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
-                  : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-                }
-              </button>
-              <button className="btn btn-ghost" onClick={() => setPanelOpen(o => !o)}>
-                Controls {panelOpen ? "▲" : "▼"}
-              </button>
+              <button className="btn btn-ghost" onClick={toggleFullscreen} title="Fullscreen (F)">{SvgFullscreen}</button>
+              <button className="btn btn-ghost" onClick={() => setPanelOpen(o => !o)}>Controls</button>
             </>
           )}
           <input ref={colorInputRef} type="color" value={exportFg} onChange={e => onExportFgChange(e.target.value)}
@@ -324,18 +306,17 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
           {stage === "idle" && (
             <div className="splash">
               <button className="btn btn-primary btn-lg" onClick={startCamera}>Start Camera</button>
-              <p className="splash-hint">Live video → ASCII art · runs in your browser</p>
+              <p className="splash-hint">Live video to ASCII art, runs in your browser</p>
               <p className="splash-hint">Works offline after first load</p>
-              {error && <p className="badge badge-err" style={{ marginTop: 8 }}>⚠ {error}</p>}
+              {error && <p className="badge badge-err" style={{ marginTop: 8 }}>{error}</p>}
               <p className="splash-hint" style={{ marginTop: 8, fontSize: 10 }}>
-                Space · start/stop &nbsp; R · record &nbsp; C · capture &nbsp; F · fullscreen &nbsp; Esc · close panel
+                Space start/stop &nbsp; R record &nbsp; C capture &nbsp; F fullscreen &nbsp; Esc close panel
               </p>
             </div>
           )}
-          {/* position:absolute so the pre never shifts the layout */}
           <pre
             ref={preRef}
-            className="ascii-output ascii-output-fill"
+            className="ascii-output ascii-fill"
             style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }}
           />
         </div>
@@ -348,22 +329,30 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
 
       {isMobile && (stage === "live" || stage === "recording") && (
         <div className="cam-controls-mobile">
-          <button className="cam-side-btn" onClick={() => navigator.clipboard.writeText(preRef.current?.innerText ?? "")} title="Copy">⎘</button>
+          <button className="cam-side-btn" onClick={() => navigator.clipboard.writeText(preRef.current?.innerText ?? "")} title="Copy">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
           {stage === "live" ? (
             <>
               <button className="cam-capture-btn" onClick={captureFrame} title="Capture" />
-              <button className="cam-record-btn" onClick={startRecording} title="Record">●</button>
+              <button className="cam-record-btn" onClick={startRecording} title="Record">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+              </button>
             </>
           ) : (
             <>
-              <button className="cam-side-btn" onClick={discard} title="Discard">✕</button>
-              <button className="cam-record-btn recording" onClick={stopAndChoose} title="Stop">■</button>
+              <button className="cam-side-btn" onClick={discard} title="Discard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+              <button className="cam-record-btn recording" onClick={stopAndChoose} title="Stop">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+              </button>
             </>
           )}
-          <button className="cam-side-btn" onClick={toggleFullscreen} title="Fullscreen">
-            {fullscreen ? "⊡" : "⛶"}
+          <button className="cam-side-btn" onClick={toggleFullscreen} title="Fullscreen">{SvgFullscreen}</button>
+          <button className="cam-side-btn" onClick={() => setPanelOpen(o => !o)} title="Controls">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
           </button>
-          <button className="cam-side-btn" onClick={() => setPanelOpen(o => !o)} title="Controls">⚙</button>
         </div>
       )}
 
@@ -375,28 +364,13 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
               {isMulti ? `${capturedCount} frames recorded.` : "Single frame captured."} Select format:
             </div>
             <div className="export-grid">
-              <button className="export-opt" onClick={() => doExport("txt")}>
-                <span className="export-opt-icon">TXT</span>
-                <span className="export-opt-label">Plain text</span>
-              </button>
-              <button className="export-opt" onClick={() => doExport("png")}>
-                <span className="export-opt-icon">PNG</span>
-                <span className="export-opt-label">Image</span>
-              </button>
-              <button className="export-opt" onClick={() => doExport("jpeg")}>
-                <span className="export-opt-icon">JPG</span>
-                <span className="export-opt-label">Image</span>
-              </button>
+              <button className="export-opt" onClick={() => doExport("txt")}><span className="export-opt-icon">TXT</span><span className="export-opt-label">Plain text</span></button>
+              <button className="export-opt" onClick={() => doExport("png")}><span className="export-opt-icon">PNG</span><span className="export-opt-label">Image</span></button>
+              <button className="export-opt" onClick={() => doExport("jpeg")}><span className="export-opt-icon">JPG</span><span className="export-opt-label">Image</span></button>
               {isMulti && (
                 <>
-                  <button className="export-opt" onClick={() => doExport("gif")}>
-                    <span className="export-opt-icon">GIF</span>
-                    <span className="export-opt-label">Animated</span>
-                  </button>
-                  <button className="export-opt" onClick={() => doExport("mp4")}>
-                    <span className="export-opt-icon">MP4</span>
-                    <span className="export-opt-label">Video</span>
-                  </button>
+                  <button className="export-opt" onClick={() => doExport("gif")}><span className="export-opt-icon">GIF</span><span className="export-opt-label">Animated</span></button>
+                  <button className="export-opt" onClick={() => doExport("mp4")}><span className="export-opt-icon">MP4</span><span className="export-opt-label">Video</span></button>
                 </>
               )}
             </div>
