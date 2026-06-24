@@ -63,7 +63,7 @@ function sampleColorFrame(
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) return null;
   // Use a smaller internal resolution for speed
-  const iw = Math.min(cols, 120), ih = Math.min(rows, 68);
+  const iw = Math.min(cols, 160), ih = Math.min(rows, 90);
   if (canvas.width !== iw) canvas.width = iw;
   if (canvas.height !== ih) canvas.height = ih;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -352,7 +352,7 @@ export default function CallTab({ opts, updateOpt }: Props) {
     streamRef.current?.getTracks().forEach(t => t.stop());
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: face, width: { ideal: 640 }, height: { ideal: 480 } },
+        video: { facingMode: face, width: { ideal: 760 }, height: { ideal: 600 } },
         audio: true,
       });
       streamRef.current = s;
