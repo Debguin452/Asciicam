@@ -191,6 +191,9 @@ export default function CallTab({ opts, updateOpt }: Props) {
   const [starting,      setStarting]      = useState(false);
   const [fullscreen,    setFullscreen]    = useState(false);
   const [expandedPanel, setExpandedPanel] = useState<"local"|"remote"|null>(null);
+  const [showSettings, setShowSettings]   = useState(false);
+  const [pipPos,       setPipPos]         = useState({ right: 12, bottom: 68 });
+  const pipDragRef = useRef<{ startX: number; startY: number; origRight: number; origBottom: number } | null>(null);
 
   useEffect(() => { optsRef.current = opts; }, [opts]);
   useEffect(() => { colorModeRef.current = colorMode; }, [colorMode]);
@@ -204,43 +207,42 @@ export default function CallTab({ opts, updateOpt }: Props) {
   }, []);
 
   // WhatsApp layout:
-  //   Remote (main panel) → fills full call area, font auto-fits to it
-  //   Local (PiP corner)  → fixed ~30×17 grid, font auto-fits to PiP box
+  //   Remote (main panel) → fills full call area, font auto-fits to opts.asciiW × opts.asciiH grid
+  //   Local (PiP corner)  → fixed small grid, font auto-fits to PiP box size
   const remoteFitRef = useRef({ cols: 60, rows: 34 });
 
   const updateCallFontSize = useCallback(() => {
-    // Main (remote) panel
+    const o = optsRef.current;
+    const remCols = Math.max(10, o.asciiW || 60);
+    const remRows = Math.max(5,  o.asciiH || 34);
+
+    // Main (remote) panel — font computed so remCols×remRows fills the panel
     const remEl = remoteAreaRef.current;
     if (remEl) {
       const { width, height } = remEl.getBoundingClientRect();
       if (width && height) {
-        // Compute aspect-correct cols/rows (phone camera ≈ 4:3 → 0.75 ratio)
-        // Maximise coverage: pick the font size that lets chars fill the panel
-        const fsByW = width  / (80 * 0.575);
-        const fsByH = height / (60 * 1.15);
+        const fsByW = width  / (remCols * 0.575);
+        const fsByH = height / (remRows * 1.1);
         const fs = Math.max(2, Math.floor(Math.min(fsByW, fsByH)));
-        const cols = Math.max(10, Math.floor(width  / (fs * 0.575)));
-        const rows = Math.max(5,  Math.floor(height / (fs * 1.15)));
-        remoteFitRef.current = { cols, rows };
+        remoteFitRef.current = { cols: remCols, rows: remRows };
         if (remotePreRef.current) {
           remotePreRef.current.style.fontSize   = fs + "px";
           remotePreRef.current.style.lineHeight = "1.1";
         }
       }
     }
-    // PiP (local) panel
+
+    // PiP (local) panel — fixed 28×16 grid, font fills the pip box
+    const PIP_COLS = 28, PIP_ROWS = 16;
     const locEl = localAreaRef.current;
     if (locEl) {
       const { width, height } = locEl.getBoundingClientRect();
       if (width && height) {
-        const fsByW = width  / (30 * 0.575);
-        const fsByH = height / (17 * 1.15);
+        const fsByW = width  / (PIP_COLS * 0.575);
+        const fsByH = height / (PIP_ROWS * 1.1);
         const fs = Math.max(2, Math.floor(Math.min(fsByW, fsByH)));
         callFsRef.current = fs;
-        fitRef.current = {
-          cols: Math.max(6,  Math.floor(width  / (fs * 0.575))),
-          rows: Math.max(4,  Math.floor(height / (fs * 1.15))),
-        };
+        fitRef.current = { cols: PIP_COLS, rows: PIP_ROWS };
         if (localPreRef.current) {
           localPreRef.current.style.fontSize   = fs + "px";
           localPreRef.current.style.lineHeight = "1.1";
@@ -322,9 +324,12 @@ export default function CallTab({ opts, updateOpt }: Props) {
     const isColor  = colorModeRef.current;
     const isMirror = facingRef.current === "user";
 
+    const pip = fitRef.current;
+
     if (isColor) {
-      const result = sampleColorFrame(video, colorCanvas.current, fitRef.current.cols, fitRef.current.rows, isMirror);
+      const result = sampleColorFrame(video, colorCanvas.current, pip.cols, pip.rows, isMirror);
       if (result) {
+        // innerHTML with newlines works fine on <pre> without display:flex
         pre.innerHTML = result.html;
         if (callRef.current?.isConnected) {
           const dummy = new Uint16Array(result.w * result.h);
@@ -338,7 +343,7 @@ export default function CallTab({ opts, updateOpt }: Props) {
     } else {
       const o = optsRef.current;
       const result = renderToString(video, offscreen.current, {
-        ...o, ...CALL_OPTS, asciiW: fitRef.current.cols, asciiH: fitRef.current.rows, color: false,
+        ...o, ...CALL_OPTS, asciiW: pip.cols, asciiH: pip.rows, color: false,
       }, isMirror, "html");
       if (result) {
         pre.textContent = result.html;
@@ -449,6 +454,28 @@ export default function CallTab({ opts, updateOpt }: Props) {
     navigator.clipboard.writeText(myCode).catch(() => {});
     setCopied(true); setTimeout(() => setCopied(false), 2000);
   };
+
+  // Draggable PiP handlers
+  const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pipDragRef.current = {
+      startX: e.clientX, startY: e.clientY,
+      origRight: pipPos.right, origBottom: pipPos.bottom,
+    };
+  };
+  const onPipPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = pipDragRef.current; if (!d) return;
+    const dx = e.clientX - d.startX, dy = e.clientY - d.startY;
+    const container = callScreenRef.current;
+    const pip       = localAreaRef.current;
+    if (!container || !pip) return;
+    const cw = container.clientWidth, ch = container.clientHeight;
+    const pw = pip.offsetWidth,       ph = pip.offsetHeight;
+    const newRight  = Math.max(0, Math.min(cw - pw, d.origRight  - dx));
+    const newBottom = Math.max(0, Math.min(ch - ph, d.origBottom - dy));
+    setPipPos({ right: newRight, bottom: newBottom });
+  };
+  const onPipPointerUp = () => { pipDragRef.current = null; };
 
   if (screen === "home") {
     return (
@@ -585,11 +612,45 @@ export default function CallTab({ opts, updateOpt }: Props) {
           )}
         </div>
 
-        {/* Local — PiP corner */}
-        <div ref={localAreaRef} className="call-panel-wa-local">
+        {/* Local — draggable PiP */}
+        <div
+          ref={localAreaRef}
+          className="call-panel-wa-local"
+          style={{ right: pipPos.right, bottom: pipPos.bottom, position: "absolute" }}
+          onPointerDown={onPipPointerDown}
+          onPointerMove={onPipPointerMove}
+          onPointerUp={onPipPointerUp}
+          onPointerCancel={onPipPointerUp}
+          onClick={e => { if (pipDragRef.current === null && Math.abs(e.clientX) < 5) return; }}
+        >
           {fps > 0 && <span className="call-pip-fps">{fps}fps</span>}
           <pre ref={localPreRef} className="ascii-output call-pre-pip" />
         </div>
+
+        {/* Settings panel overlay */}
+        {showSettings && (
+          <div className="call-settings-overlay" onClick={() => setShowSettings(false)}>
+            <div className="call-settings-panel" onClick={e => e.stopPropagation()}>
+              <div className="call-settings-title">Grid size</div>
+              <div className="call-settings-row">
+                <span>Cols</span>
+                <input type="range" min="20" max="120" step="4"
+                  value={opts.asciiW}
+                  onChange={e => { updateOpt("asciiW", +e.target.value); setTimeout(updateCallFontSize, 50); }}
+                />
+                <span className="call-settings-val">{opts.asciiW}</span>
+              </div>
+              <div className="call-settings-row">
+                <span>Rows</span>
+                <input type="range" min="10" max="80" step="2"
+                  value={opts.asciiH}
+                  onChange={e => { updateOpt("asciiH", +e.target.value); setTimeout(updateCallFontSize, 50); }}
+                />
+                <span className="call-settings-val">{opts.asciiH}</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="call-bar">
@@ -634,6 +695,16 @@ export default function CallTab({ opts, updateOpt }: Props) {
             </svg>
           </span>
           <span className="call-circle-label">Flip</span>
+        </button>
+
+        <button className={`call-circle-btn${showSettings ? " call-circle-active" : ""}`} onClick={() => setShowSettings(s => !s)} title="Grid settings">
+          <span className="call-circle-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+            </svg>
+          </span>
+          <span className="call-circle-label">Grid</span>
         </button>
 
         <button className="call-circle-btn" onClick={toggleFullscreen} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
