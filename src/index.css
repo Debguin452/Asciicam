@@ -936,6 +936,22 @@ html, body, #root {
 }
 @keyframes pulse-opacity { 0%,100%{opacity:0.3} 50%{opacity:0.7} }
 
+/* Panel expand: tap a panel to make it fill the full panels area */
+.call-panel { cursor: pointer; }
+.call-panel-solo {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  z-index: 2;
+}
+.call-panel-hidden { display: none; }
+.call-panel-expand-hint {
+  font-size: 8px;
+  color: var(--fg-faint);
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
 /* ── BOTTOM CONTROL BAR — 5 equal circular buttons ───── */
 .call-bar {
   display: flex;
