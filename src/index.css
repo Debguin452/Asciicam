@@ -875,46 +875,95 @@ html, body, #root {
   background: var(--bg);
 }
 
-.call-panels {
+/* ── WhatsApp-style call layout ─────────────────────────── */
+.call-panels-wa {
   flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--border);
+  position: relative;
   overflow: hidden;
   min-height: 0;
+  background: #000;
 }
 
-.call-panel {
-  position: relative;
-  background: var(--bg);
+/* Remote fills the full background */
+.call-panel-wa-remote {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
 }
 
-.call-panel-tag {
+/* Local is a PiP in bottom-right corner */
+.call-panel-wa-local {
   position: absolute;
-  top: 6px;
-  left: 8px;
-  z-index: 4;
-  font-size: 9px;
-  color: var(--fg-faint);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  background: color-mix(in srgb, var(--bg) 80%, transparent);
-  padding: 2px 6px;
-  border-radius: 3px;
+  bottom: 12px;
+  right: 12px;
+  width: 28%;
+  max-width: 140px;
+  aspect-ratio: 3/4;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: var(--bg);
+  z-index: 10;
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
 }
 
-.call-fps-tag {
-  font-size: 8px;
-  color: var(--fg-dim);
-  letter-spacing: 0;
+/* ASCII pre for remote — fills parent absolutely, centered */
+.call-pre-wa {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  font-family: "Fira Code", "Cascadia Code", "Consolas", monospace;
+  white-space: pre;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  line-height: 1.1;
+}
+
+/* ASCII pre for PiP — fills pip box */
+.call-pre-pip {
+  margin: 0;
+  padding: 0;
+  font-family: "Fira Code", "Cascadia Code", "Consolas", monospace;
+  white-space: pre;
+  overflow: hidden;
+  line-height: 1.1;
+  font-size: 4px;
+}
+
+.call-pip-fps {
+  position: absolute;
+  top: 4px;
+  left: 5px;
+  font-size: 7px;
+  color: var(--fg-faint);
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Remote peer status badges (muted / cam-off icons) */
+.call-remote-badges {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  background: color-mix(in srgb, #000 60%, transparent);
+  padding: 4px 7px;
+  border-radius: 20px;
+  color: #fff;
+  opacity: 0.85;
 }
 
 .call-panel-waiting {
@@ -922,35 +971,14 @@ html, body, #root {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   color: var(--fg-faint);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.04em;
   text-align: center;
-  padding: 16px;
+  padding: 20px;
 }
-.call-panel-waiting-icon {
-  font-size: 28px;
-  opacity: 0.4;
-  animation: pulse-opacity 2s ease-in-out infinite;
-}
-@keyframes pulse-opacity { 0%,100%{opacity:0.3} 50%{opacity:0.7} }
-
-/* Panel expand: tap a panel to make it fill the full panels area */
-.call-panel { cursor: pointer; }
-.call-panel-solo {
-  grid-column: 1 / -1;
-  grid-row: 1 / -1;
-  z-index: 2;
-}
-.call-panel-hidden { display: none; }
-.call-panel-expand-hint {
-  font-size: 8px;
-  color: var(--fg-faint);
-  letter-spacing: 0.06em;
-  opacity: 0.7;
-  margin-left: 4px;
-}
+@keyframes pulse-opacity { 0%,100%{opacity:0.25} 50%{opacity:0.6} }
 
 /* ── BOTTOM CONTROL BAR — 5 equal circular buttons ───── */
 .call-bar {
@@ -1005,6 +1033,17 @@ html, body, #root {
   background: var(--danger-bg);
   border-color: var(--danger-border);
   color: var(--danger);
+}
+/* Mic 3-state:
+   call-circle-active-mic  — normal (mic live, neutral appearance)
+   call-circle-muted       — amber (self-muted, clearly different from danger) */
+.call-circle-active-mic {
+  border-color: var(--fg-dim);
+}
+.call-circle-muted {
+  background: rgba(255,160,0,0.15);
+  border-color: #ffa000;
+  color: #ffa000;
 }
 .call-circle-active {
   background: color-mix(in srgb, var(--fg) 12%, var(--bg-elevated));
