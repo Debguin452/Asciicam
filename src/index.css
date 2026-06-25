@@ -483,7 +483,7 @@ html, body, #root {
   .toolbar { height: auto; min-height: 32px; padding: 3px 6px; }
   .main-layout { flex-direction: column; }
   .ascii-area { flex: 1; padding: 3px; }
-  .ascii-output { font-size: 5px !important; line-height: 1.1; }
+  .ascii-output { line-height: 1.1; }  /* font-size set by JS adaptively */
   .controls-panel { width: 100%; border-left: none; border-top: 1px solid var(--border); height: 220px; flex-shrink: 0; overflow-y: auto; }
   .panel-body { overflow-x: hidden; }
   .btn { min-height: 30px; padding: 5px 9px; }
@@ -1113,4 +1113,29 @@ html, body, #root {
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--fg-faint);
+}
+
+/* ── Camera quality buttons ──────────────────────────────────────────────── */
+.cam-quality-bar { display: flex; gap: 3px; align-items: center; }
+.cam-quality-btn {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 2px 7px; border-radius: 3px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--fg-dim); cursor: pointer; font-family: inherit;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+  line-height: 1.6;
+}
+.cam-quality-btn:hover { color: var(--fg); border-color: var(--fg-dim); }
+.cam-quality-btn.cam-quality-active {
+  color: var(--bg, #0a0a0a); background: var(--fg); border-color: var(--fg);
+}
+
+/* ── Call quality badge ──────────────────────────────────────────────────── */
+.call-quality-badge {
+  display: inline-flex; align-items: center;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+  padding: 2px 7px; border-radius: 3px;
+  border: 1px solid currentColor; background: transparent;
+  user-select: none; cursor: default; flex-shrink: 0;
+  font-family: inherit; transition: color 0.4s;
 }
