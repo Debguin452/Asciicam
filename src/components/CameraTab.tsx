@@ -17,23 +17,40 @@ interface Props {
 }
 
 type Stage = "idle" | "live" | "recording" | "choosing" | "exporting";
+type CamQuality = "hq" | "balanced" | "hs";
+
+const CAM_QUALITY: Record<CamQuality, {
+  label: string;
+  title: string;
+  video: MediaTrackConstraints;
+  minFrameMs: number;
+  forceSmooth: boolean;
+  disableHeavy: boolean;
+}> = {
+  hq:       { label: "HQ",  title: "High Quality — 720p, 25fps, temporal smoothing", video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720  } }, minFrameMs: 40,  forceSmooth: true,  disableHeavy: false },
+  balanced: { label: "Bal", title: "Balanced — 480p, 30fps",                         video: { facingMode: "user", width: { ideal: 640  }, height: { ideal: 480  } }, minFrameMs: 33,  forceSmooth: false, disableHeavy: false },
+  hs:       { label: "HS",  title: "High Speed — 360p, max FPS, minimal processing", video: { facingMode: "user", width: { ideal: 640  }, height: { ideal: 360  } }, minFrameMs: 0,   forceSmooth: false, disableHeavy: true  },
+};
 
 export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onReset, onLibraryUpdated, exportFg, onExportFgChange }: Props) {
-  const videoRef      = useRef<HTMLVideoElement>(null);
-  const offscreen     = useRef(document.createElement("canvas"));
-  const preRef        = useRef<HTMLPreElement>(null);
-  const areaRef       = useRef<HTMLDivElement>(null);
-  const rafRef        = useRef(0);
-  const streamRef     = useRef<MediaStream | null>(null);
-  const optsRef       = useRef(opts);
-  const recordedRef   = useRef<AsciiFrame[]>([]);
-  const liveFpsRef    = useRef(15);
-  const fpsTimesRef   = useRef<number[]>([]);
-  const lastFrameRef  = useRef<AsciiFrame | null>(null);
-  const stageRef      = useRef<Stage>("idle");
-  const fitRef        = useRef({ cols: 140, rows: 80 });
-  const fontSizeRef   = useRef(fontSize);
-  const colorInputRef = useRef<HTMLInputElement>(null);
+  const videoRef         = useRef<HTMLVideoElement>(null);
+  const offscreen        = useRef(document.createElement("canvas"));
+  const preRef           = useRef<HTMLPreElement>(null);
+  const areaRef          = useRef<HTMLDivElement>(null);
+  const rafRef           = useRef(0);
+  const streamRef        = useRef<MediaStream | null>(null);
+  const optsRef          = useRef(opts);
+  const recordedRef      = useRef<AsciiFrame[]>([]);
+  const liveFpsRef       = useRef(15);
+  const fpsTimesRef      = useRef<number[]>([]);
+  const lastFrameRef     = useRef<AsciiFrame | null>(null);
+  const stageRef         = useRef<Stage>("idle");
+  const fitRef           = useRef({ cols: 140, rows: 80 });
+  const fontSizeRef      = useRef(fontSize);
+  const colorInputRef    = useRef<HTMLInputElement>(null);
+  const camQualityRef    = useRef<CamQuality>("balanced");
+  const lastRenderRef    = useRef(0);
+  const minFrameMsRef    = useRef(33);
 
   const [stage, setStageState]          = useState<Stage>("idle");
   const [capturedCount, setCapturedCount] = useState(0);
@@ -44,24 +61,22 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const [exportStatus, setExportStatus] = useState("");
   const [isMobile]                      = useState(() => window.innerWidth <= 720);
   const [fullscreen, setFullscreen]     = useState(false);
+  const [camQuality, setCamQuality]     = useState<CamQuality>("balanced");
 
   const setStage = (s: Stage) => { stageRef.current = s; setStageState(s); };
 
-  useEffect(() => { optsRef.current = opts; }, [opts]);
 
   const updateFit = useCallback(() => {
     const area = areaRef.current;
     if (!area) return;
     const { width, height } = area.getBoundingClientRect();
     if (!width || !height) return;
-    const BASE_FS = 10;
+    const fs = fontSizeRef.current; // font size controls grid density
     fitRef.current = {
-      cols: Math.max(10, Math.floor(width  / (BASE_FS * 0.575))),
-      rows: Math.max(5,  Math.floor(height / (BASE_FS * 1.15))),
+      cols: Math.max(10, Math.floor(width  / (fs * 0.575))),
+      rows: Math.max(5,  Math.floor(height / (fs * 1.15))),
     };
   }, []);
-
-  useEffect(() => { fontSizeRef.current = fontSize; }, [fontSize]);
 
   useEffect(() => {
     const area = areaRef.current;
@@ -72,21 +87,41 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     return () => obs.disconnect();
   }, [updateFit]);
 
+  useEffect(() => { optsRef.current = opts; }, [opts]);
+  useEffect(() => {
+    fontSizeRef.current = fontSize;
+    updateFit(); // grid recalculates when font size changes
+  }, [fontSize, updateFit]);
+
   const renderLoop = useCallback(() => {
     const video = videoRef.current;
     const pre = preRef.current;
     if (!video || !pre || video.readyState < 2) {
-      rafRef.current = requestAnimationFrame(renderLoop);
-      return;
+      rafRef.current = requestAnimationFrame(renderLoop); return;
     }
-    const result = renderToString(video, offscreen.current, {
+
+    // FPS gate for quality modes
+    const now = performance.now();
+    const minMs = minFrameMsRef.current;
+    if (minMs > 0 && lastRenderRef.current > 0 && now - lastRenderRef.current < minMs) {
+      rafRef.current = requestAnimationFrame(renderLoop); return;
+    }
+    lastRenderRef.current = now;
+
+    const q = CAM_QUALITY[camQualityRef.current];
+    const baseOpts: AsciiOptions = {
       ...optsRef.current,
       asciiW: fitRef.current.cols,
       asciiH: fitRef.current.rows,
-    }, true, "html");
+      ...(q.forceSmooth ? { temporalSmoothing: true } : {}),
+      ...(q.disableHeavy ? { noiseReduction: false, localContrast: false, histEq: false } : {}),
+    } as AsciiOptions;
+
+    const result = renderToString(video, offscreen.current, baseOpts, true, "html");
     const frame = stageRef.current === "recording"
-      ? processFrame(video, offscreen.current, { ...optsRef.current, asciiW: fitRef.current.cols, asciiH: fitRef.current.rows }, true)
+      ? processFrame(video, offscreen.current, baseOpts, true)
       : null;
+
     if (result) {
       if (frame) lastFrameRef.current = frame;
       const { html, isColor } = result;
@@ -95,11 +130,10 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
         recordedRef.current.push(frame);
         setRecCount(c => c + 1);
       }
-      const now = performance.now();
       fpsTimesRef.current.push(now);
       if (fpsTimesRef.current.length > 30) fpsTimesRef.current.shift();
       if (fpsTimesRef.current.length > 1) {
-        const f = Math.round((fpsTimesRef.current.length - 1) / (now - fpsTimesRef.current[0]) * 1000);
+        const f = Math.round((fpsTimesRef.current.length-1) / (now-fpsTimesRef.current[0]) * 1000);
         setFps(f);
         liveFpsRef.current = f || 15;
       }
@@ -149,14 +183,37 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     if (videoRef.current) videoRef.current.srcObject = null;
   };
 
+  const setQuality = (q: CamQuality) => {
+    camQualityRef.current = q;
+    minFrameMsRef.current = CAM_QUALITY[q].minFrameMs;
+    setCamQuality(q);
+    if (q === "hq" && !optsRef.current.temporalSmoothing) {
+      resetTemporalSmoothing();
+    }
+    // Restart camera with new constraints if already streaming
+    if (stageRef.current === "live" || stageRef.current === "recording") {
+      startCameraWithConstraints(q).catch(() => {});
+    }
+  };
+
+  const startCameraWithConstraints = async (q: CamQuality = camQualityRef.current) => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: CAM_QUALITY[q].video,
+      audio: false,
+    });
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = stream;
+    if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+    return stream;
+  };
+
   const startCamera = async () => {
     setError(null);
     resetTemporalSmoothing();
+    lastRenderRef.current = 0;
     if (window.innerWidth > 720) setPanelOpen(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
-      streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+      await startCameraWithConstraints();
       setStage("live");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Camera access denied");
@@ -268,6 +325,20 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
           )}
           {stage === "recording" && <span className="badge badge-rec">REC {recCount}f</span>}
           {error && <span className="badge badge-err">{error}</span>}
+          {(stage === "live" || stage === "recording") && (
+            <span className="cam-quality-bar">
+              {(["hq", "balanced", "hs"] as CamQuality[]).map(q => (
+                <button
+                  key={q}
+                  className={`cam-quality-btn${camQuality === q ? " cam-quality-active" : ""}`}
+                  onClick={() => setQuality(q)}
+                  title={CAM_QUALITY[q].title}
+                >
+                  {CAM_QUALITY[q].label}
+                </button>
+              ))}
+            </span>
+          )}
         </div>
         <div className="toolbar-right">
           {stage === "idle" && (
