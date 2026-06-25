@@ -1,12 +1,37 @@
 import Peer, { type DataConnection, type MediaConnection } from "peerjs";
 
+export interface RemoteState {
+  micMuted: boolean;
+  camOff: boolean;
+}
+
 export type CallStatus = "idle"|"connecting"|"waiting"|"connected"|"error"|"closed";
+
+export type CallQualityLevel = "ultra" | "high" | "med" | "low" | "min";
+
+export interface QualityParams {
+  cols: number;
+  rows: number;
+  color: boolean;
+  keyframeInterval: number;
+  charset: string;
+}
+
+export const QUALITY_STEPS: Record<CallQualityLevel, QualityParams> = {
+  ultra: { cols: 80,  rows: 46, color: true,  keyframeInterval: 60, charset: " .:-=+*#%@" },
+  high:  { cols: 60,  rows: 34, color: false, keyframeInterval: 30, charset: " .:-=+*#%@" },
+  med:   { cols: 44,  rows: 25, color: false, keyframeInterval: 20, charset: " .:-+*#@" },
+  low:   { cols: 28,  rows: 16, color: false, keyframeInterval: 15, charset: " .:#@" },
+  min:   { cols: 20,  rows: 12, color: false, keyframeInterval: 10, charset: " @" },
+};
+
+const QUALITY_ORDER: CallQualityLevel[] = ["min", "low", "med", "high"];
 
 export interface RemoteFrame {
   w: number; h: number;
   charset: string;
   charIndices: Uint16Array;
-  colors?: Uint8Array; // r,g,b per cell
+  colors?: Uint8Array;
 }
 
 export interface CallManagerEvents {
@@ -14,35 +39,33 @@ export interface CallManagerEvents {
   onRemoteFrame: (frame: RemoteFrame) => void;
   onRemoteHangup: () => void;
   onRemoteStream: (stream: MediaStream) => void;
+  onRemoteState?: (state: RemoteState) => void;
+  onQualityChange?: (level: CallQualityLevel, params: QualityParams) => void;
 }
 
-// Free STUN + Open Relay free TURN (no signup required)
+// Free STUN + open TURN relays — enough for most NAT situations
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun.cloudflare.com:3478" },
   { urls: "stun:global.stun.twilio.com:3478" },
-  // Open Relay free TURN — handles symmetric NAT (no account needed)
-  { urls: "turn:openrelay.metered.ca:80",       username: "openrelayproject", credential: "openrelayproject" },
-  { urls: "turn:openrelay.metered.ca:443",      username: "openrelayproject", credential: "openrelayproject" },
-  { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:80",               username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443",              username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp",username: "openrelayproject", credential: "openrelayproject" },
 ];
 
 function toArrayBuffer(data: unknown): ArrayBuffer | null {
   if (data instanceof ArrayBuffer) return data;
-  // PeerJS "binary" (BinaryPack) typically decodes to Uint8Array
   if (data instanceof Uint8Array) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
   if (ArrayBuffer.isView(data)) {
     const v = data as ArrayBufferView;
     return v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) as ArrayBuffer;
   }
-  // BinaryPack may wrap as { data: number[], type: "Buffer" }
   if (data && typeof data === "object" && "data" in data) {
     const inner = (data as { data: unknown }).data;
     if (inner instanceof Uint8Array) return inner.buffer.slice(inner.byteOffset, inner.byteOffset + inner.byteLength) as ArrayBuffer;
     if (Array.isArray(inner)) return new Uint8Array(inner as number[]).buffer;
   }
-  if (data instanceof Blob) return null; // handled async by caller
   return null;
 }
 
@@ -58,7 +81,6 @@ function encode(
   let streamBytes: Uint8Array;
 
   if (isDelta && prevIndices) {
-    // Delta: [pos u16, charIdx u16] pairs for changed cells only
     const changed: number[] = [];
     for (let i = 0; i < N; i++) {
       if (charIndices[i] !== prevIndices[i]) changed.push(i, charIndices[i]);
@@ -67,7 +89,6 @@ function encode(
     for (let i = 0; i < changed.length; i++) buf[i] = changed[i];
     streamBytes = new Uint8Array(buf.buffer);
   } else {
-    // RLE keyframe: [charIdx u16, runLen u16] pairs
     const runs: number[] = [];
     let i = 0;
     while (i < N) {
@@ -138,9 +159,10 @@ export class CallManager {
   private peer: Peer | null = null;
   private dataConn: DataConnection | null = null;
   private mediaConn: MediaConnection | null = null;
-  private pendingCall: MediaConnection | null = null;
   private events: CallManagerEvents;
   private localStream: MediaStream | null = null;
+  // Pending incoming call — answered as soon as we have a stream
+  private pendingIncomingCall: MediaConnection | null = null;
   private prevSentIndices: Uint16Array | null = null;
   private prevRecvFrame: RemoteFrame | null = null;
   private frameCount = 0;
@@ -148,17 +170,18 @@ export class CallManager {
   private lastSentAt = 0;
   private targetFps = 30;
 
-  constructor(events: CallManagerEvents) { this.events = events; }
+  private qualityLevel: CallQualityLevel = "high";
+  private recentSends = 0;
+  private recentDrops = 0;
+  private qualityCheckCounter = 0;
+  private consecutiveGood = 0;
+  private readonly CHECK_FRAMES = 30;
 
-  setLocalStream(stream: MediaStream) { this.localStream = stream; }
+  constructor(events: CallManagerEvents) { this.events = events; }
 
   async start(): Promise<string> {
     return new Promise((resolve, reject) => {
-      // Use PeerJS cloud (free, no account needed)
-      const peer = new Peer({
-        config: { iceServers: ICE_SERVERS },
-        // debug: 1, // uncomment to see connection logs
-      });
+      const peer = new Peer({ config: { iceServers: ICE_SERVERS } });
       this.peer = peer;
 
       peer.on("open", id => {
@@ -166,13 +189,23 @@ export class CallManager {
         resolve(id);
       });
 
+      // Incoming data channel from the caller
       peer.on("connection", conn => this.attachData(conn));
 
+      // Incoming media call — answer immediately if we have a stream,
+      // otherwise hold it until answerWithStream() is called
       peer.on("call", call => {
         this.mediaConn = call;
-        this.pendingCall = call;
-        if (this.localStream) this.answerWithStream(this.localStream);
-        this.events.onStatus("connected");
+        if (this.localStream) {
+          // Stream already available — answer right away
+          call.answer(this.localStream);
+          call.on("stream", s => this.events.onRemoteStream(s));
+          call.on("close",  () => this.events.onRemoteHangup());
+          call.on("error",  () => this.events.onRemoteHangup());
+        } else {
+          // Stream not ready yet — buffer, answer when stream arrives
+          this.pendingIncomingCall = call;
+        }
       });
 
       peer.on("error", err => {
@@ -181,66 +214,99 @@ export class CallManager {
       });
 
       peer.on("disconnected", () => {
-        // Auto-reconnect
-        setTimeout(() => { try { peer.reconnect(); } catch {} }, 2000);
+        setTimeout(() => { try { peer.reconnect(); } catch { /**/ } }, 2000);
       });
     });
   }
 
-  answerWithStream(localStream: MediaStream) {
-    this.localStream = localStream;
-    if (this.pendingCall) {
-      this.pendingCall.answer(localStream);
-      this.pendingCall.on("stream", s => this.events.onRemoteStream(s));
-      this.pendingCall.on("close", () => this.events.onRemoteHangup());
-      this.pendingCall = null;
+  /** Call this as soon as the local MediaStream is available (after getUserMedia). */
+  answerWithStream(stream: MediaStream) {
+    this.localStream = stream;
+    if (this.pendingIncomingCall) {
+      const call = this.pendingIncomingCall;
+      this.pendingIncomingCall = null;
+      call.answer(stream);
+      call.on("stream", s => this.events.onRemoteStream(s));
+      call.on("close",  () => this.events.onRemoteHangup());
+      call.on("error",  () => this.events.onRemoteHangup());
     }
   }
 
-  connectTo(remoteId: string, localStream: MediaStream | null) {
+  /** Initiate an outgoing call + data connection to a remote peer. */
+  connectTo(remoteId: string, stream: MediaStream | null) {
     if (!this.peer) return;
     this.events.onStatus("connecting", remoteId);
-    this.localStream = localStream;
+    this.localStream = stream;
 
-    // DATA channel: reliable=true so delta encoding state never diverges
-    // serialization:"none" = raw binary, no msgpack wrapping (fixes ArrayBuffer receipt)
-    const conn = this.peer.connect(remoteId.trim(), {
-      reliable: true,
-      serialization: "binary",
-    });
+    // Data channel — use "binary" serialization (BinaryPack)
+    const conn = this.peer.connect(remoteId.trim(), { reliable: true, serialization: "binary" });
     this.attachData(conn);
 
-    if (localStream) {
-      const call = this.peer.call(remoteId.trim(), localStream);
+    // Media call for audio (and optionally video if desired later)
+    if (stream) {
+      const call = this.peer.call(remoteId.trim(), stream);
       this.mediaConn = call;
       call.on("stream", s => this.events.onRemoteStream(s));
-      call.on("close", () => this.events.onRemoteHangup());
+      call.on("close",  () => this.events.onRemoteHangup());
+      call.on("error",  () => this.events.onRemoteHangup());
+    }
+  }
+
+  private adaptQuality() {
+    const dropRate = this.recentSends > 0 ? this.recentDrops / this.recentSends : 0;
+    const idx = QUALITY_ORDER.indexOf(this.qualityLevel);
+    if (idx === -1) return; // "ultra" — user-controlled
+
+    if (dropRate > 0.3 && idx > 0) {
+      this.consecutiveGood = 0;
+      const next = QUALITY_ORDER[idx - 1];
+      this.qualityLevel = next;
+      this.keyframeInterval = QUALITY_STEPS[next].keyframeInterval;
+      this.events.onQualityChange?.(next, QUALITY_STEPS[next]);
+    } else if (dropRate < 0.05) {
+      this.consecutiveGood++;
+      if (this.consecutiveGood >= 3 && idx < QUALITY_ORDER.length - 1) {
+        this.consecutiveGood = 0;
+        const next = QUALITY_ORDER[idx + 1];
+        this.qualityLevel = next;
+        this.keyframeInterval = QUALITY_STEPS[next].keyframeInterval;
+        this.events.onQualityChange?.(next, QUALITY_STEPS[next]);
+      }
+    } else {
+      this.consecutiveGood = 0;
     }
   }
 
   private attachData(conn: DataConnection) {
     this.dataConn = conn;
-
-    conn.on("open", () => {
-      this.events.onStatus("connected");
-    });
-
+    conn.on("open", () => this.events.onStatus("connected"));
     conn.on("data", (data: unknown) => {
+      // State message — JSON object sent as-is over BinaryPack
+      if (data && typeof data === "object" && !ArrayBuffer.isView(data)
+          && !(data instanceof Blob) && !(data instanceof ArrayBuffer)
+          && "type" in (data as Record<string, unknown>)
+          && (data as { type: string }).type === "state") {
+        const st = data as { type: string; micMuted: boolean; camOff: boolean };
+        this.events.onRemoteState?.({ micMuted: st.micMuted, camOff: st.camOff });
+        return;
+      }
+      // Binary frame
       const buf = toArrayBuffer(data);
       if (buf) {
         const frame = decode(buf, this.prevRecvFrame);
         if (frame) { this.prevRecvFrame = frame; this.events.onRemoteFrame(frame); }
-      } else if (data instanceof Blob) {
-        // Handle Blob asynchronously (some browsers)
+        return;
+      }
+      // Blob fallback (shouldn't happen with binary serialization but guard anyway)
+      if (data instanceof Blob) {
         data.arrayBuffer().then(ab => {
           const frame = decode(ab, this.prevRecvFrame);
           if (frame) { this.prevRecvFrame = frame; this.events.onRemoteFrame(frame); }
         }).catch(() => {});
       }
     });
-
-    conn.on("close",  () => { this.events.onStatus("closed"); });
-    conn.on("error", err => { this.events.onStatus("error", err.message); });
+    conn.on("close",  () => this.events.onStatus("closed"));
+    conn.on("error", err => this.events.onStatus("error", err.message));
   }
 
   sendFrame(
@@ -255,6 +321,8 @@ export class CallManager {
     const isKey = this.frameCount % this.keyframeInterval === 1;
     const prev = isKey ? null : this.prevSentIndices;
     const buf = encode(charIndices, w, h, charset, colors, prev);
+
+    this.recentSends++;
     try {
       this.dataConn.send(buf);
       if (!isKey && this.prevSentIndices?.length === charIndices.length) {
@@ -262,17 +330,40 @@ export class CallManager {
       } else {
         this.prevSentIndices = new Uint16Array(charIndices);
       }
-    } catch { /* channel congested — drop frame */ }
+    } catch { this.recentDrops++; }
+
+    this.qualityCheckCounter++;
+    if (this.qualityCheckCounter >= this.CHECK_FRAMES) {
+      this.adaptQuality();
+      this.qualityCheckCounter = 0;
+      this.recentSends = 0;
+      this.recentDrops = 0;
+    }
+  }
+
+  sendState(micMuted: boolean, camOff: boolean) {
+    if (!this.dataConn?.open) return;
+    try { this.dataConn.send({ type: "state", micMuted, camOff }); } catch { /**/ }
   }
 
   hangup() {
     this.frameCount = 0; this.prevSentIndices = null; this.prevRecvFrame = null;
-    try { this.dataConn?.close(); } catch {}
-    try { this.mediaConn?.close(); } catch {}
-    try { this.peer?.destroy(); } catch {}
+    this.pendingIncomingCall = null;
+    this.recentSends = 0; this.recentDrops = 0;
+    this.qualityCheckCounter = 0; this.consecutiveGood = 0;
+    this.qualityLevel = "high"; this.keyframeInterval = 30;
+    try { this.dataConn?.close(); }  catch { /**/ }
+    try { this.mediaConn?.close(); } catch { /**/ }
+    try { this.peer?.destroy(); }    catch { /**/ }
     this.dataConn = null; this.mediaConn = null; this.peer = null;
+    this.localStream = null;
   }
 
-  setTargetFps(fps: number) { this.targetFps = fps; }
+  setTargetFps(fps: number)        { this.targetFps = fps; }
+  getQualityLevel(): CallQualityLevel { return this.qualityLevel; }
+  setQualityLevel(level: CallQualityLevel) {
+    this.qualityLevel = level;
+    this.keyframeInterval = QUALITY_STEPS[level].keyframeInterval;
+  }
   get isConnected() { return !!this.dataConn?.open; }
 }
