@@ -47,6 +47,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
   const stageRef         = useRef<Stage>("idle");
   const fitRef           = useRef({ cols: 140, rows: 80 });
   const fontSizeRef      = useRef(fontSize);
+  const updateFitRef     = useRef<() => void>(() => {});
   const colorInputRef    = useRef<HTMLInputElement>(null);
   const camQualityRef    = useRef<CamQuality>("balanced");
   const lastRenderRef    = useRef(0);
@@ -65,18 +66,26 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
 
   const setStage = (s: Stage) => { stageRef.current = s; setStageState(s); };
 
+  useEffect(() => { optsRef.current = opts; }, [opts]);
+
 
   const updateFit = useCallback(() => {
     const area = areaRef.current;
     if (!area) return;
     const { width, height } = area.getBoundingClientRect();
     if (!width || !height) return;
-    const fs = fontSizeRef.current; // font size controls grid density
+    const fs = fontSizeRef.current;       // actual live font size drives char count
     fitRef.current = {
       cols: Math.max(10, Math.floor(width  / (fs * 0.575))),
       rows: Math.max(5,  Math.floor(height / (fs * 1.15))),
     };
+    // Mirror into pre element so it stays fullscreen at this font size
+    const pre = preRef.current;
+    if (pre) pre.style.fontSize = fs + 'px';
   }, []);
+
+  // Keep ref current so renderLoop (empty deps) always calls latest version
+  useEffect(() => { updateFitRef.current = updateFit; }, [updateFit]);
 
   useEffect(() => {
     const area = areaRef.current;
@@ -87,10 +96,9 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
     return () => obs.disconnect();
   }, [updateFit]);
 
-  useEffect(() => { optsRef.current = opts; }, [opts]);
   useEffect(() => {
     fontSizeRef.current = fontSize;
-    updateFit(); // grid recalculates when font size changes
+    updateFit();          // font size changed → recalc cols/rows
   }, [fontSize, updateFit]);
 
   const renderLoop = useCallback(() => {
@@ -136,6 +144,23 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
         const f = Math.round((fpsTimesRef.current.length-1) / (now-fpsTimesRef.current[0]) * 1000);
         setFps(f);
         liveFpsRef.current = f || 15;
+
+        // ── Adaptive font size ────────────────────────────────────────────
+        // Fast → shrink font → more chars fill screen (finer detail, same fullscreen).
+        // Slow → grow font  → fewer chars, less CPU.
+        // Changes happen every ~60 frames so they're not jumpy.
+        if (fpsTimesRef.current.length >= 20) {
+          const cur = fontSizeRef.current;
+          let next = cur;
+          if      (f >= 28 && cur > 4)  next = cur - 1;   // fast  → finer
+          else if (f < 18  && cur < 14) next = cur + 1;   // slow  → coarser
+          if (next !== cur) {
+            fontSizeRef.current = next;
+            setFontSize(next);   // update React state → ControlsPanel shows it
+            updateFitRef.current(); // recompute cols/rows immediately
+            fpsTimesRef.current = []; // reset window after change
+          }
+        }
       }
     }
     rafRef.current = requestAnimationFrame(renderLoop);
@@ -388,7 +413,7 @@ export default function CameraTab({ opts, updateOpt, fontSize, setFontSize, onRe
           <pre
             ref={preRef}
             className="ascii-output ascii-fill"
-            style={{ fontSize: `${fontSize}px`, lineHeight: "1.15" }}
+            style={{ lineHeight: "1.15" }}
           />
         </div>
         {panelOpen && (stage === "live" || stage === "recording") && (
