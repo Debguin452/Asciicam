@@ -1,24 +1,22 @@
+// POST /api/rooms — create a new room, register host peer ID
 interface Env { ROOMS_KV: KVNamespace; }
 
 const CORS = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin":  "*",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...CORS, "Content-Type": "application/json" },
+    status, headers: { ...CORS, "Content-Type": "application/json" },
   });
 }
 
 function genCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
   const arr = crypto.getRandomValues(new Uint8Array(6));
-  for (const b of arr) code += chars[b % chars.length];
-  return code;
+  return Array.from(arr, b => chars[b % chars.length]).join("");
 }
 
 export const onRequestOptions: PagesFunction = async () =>
@@ -37,5 +35,5 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       return json({ code, peerId });
     }
   }
-  return json({ error: "Could not generate unique room code, try again" }, 503);
+  return json({ error: "Retry" }, 503);
 };
