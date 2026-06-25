@@ -6,24 +6,28 @@ export default defineConfig({
   base: "/",
   plugins: [react()],
   resolve: {
-    alias: {
-      "@": path.resolve(import.meta.dirname, "src"),
-    },
+    alias: { "@": path.resolve(import.meta.dirname, "src") },
+    dedupe: ["react", "react-dom"],
   },
+  root: path.resolve(import.meta.dirname),
   build: {
-    outDir: "dist",
+    outDir: path.resolve(import.meta.dirname, "dist"),
     emptyOutDir: true,
   },
   server: {
-   port: 5173,
-   host: true,
-   allowedHosts: true,
-   hmr: {
-      clientPort: 443,
+    port: 5173,
+    host: "0.0.0.0",
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
     },
   },
- preview: {
+  preview: {
     port: 4173,
-    host: true,
+    host: "0.0.0.0",
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    },
   },
 });
